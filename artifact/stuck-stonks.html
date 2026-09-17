@@ -259,9 +259,10 @@
         <tr>
           <th data-sort="symbol">Token</th>
           <th data-sort="age">Age</th>
-          <th data-sort="quoteSymbol">Quote</th>
+          <th data-sort="holderCount">Holders</th>
+          <th data-sort="pendingTaxUsd">Pending tax</th>
+          <th data-sort="lastPayoutAt">Last payout</th>
           <th data-sort="volume24hUsd">24h vol</th>
-          <th data-sort="isRewardLaunch">Reward launch</th>
         </tr>
       </thead>
       <tbody id="recentBody"></tbody>
@@ -468,17 +469,33 @@
   }
 
   function renderRecent() {
-    const rows = sortRows(recentData.filter(matchesSearch), sortKey === "pendingTaxUsd" ? "age" : sortKey, sortKey === "pendingTaxUsd" ? -1 : sortDir);
+    const key = sortKey === "quoteSymbol" || sortKey === "isRewardLaunch" ? "age" : sortKey;
+    const dir = sortKey === "quoteSymbol" || sortKey === "isRewardLaunch" ? 1 : sortDir;
+    const rows = sortRows(recentData.filter(matchesSearch), key, dir);
     const body = document.getElementById("recentBody");
     if (rows.length === 0) {
-      body.innerHTML = '<tr><td colspan="5" class="state-msg">Nothing launched in the last 4 hours.</td></tr>';
+      body.innerHTML = '<tr><td colspan="6" class="state-msg">Nothing launched in the last 4 hours.</td></tr>';
       return;
     }
+    const maxPending = Math.max(...recentData.map((p) => p.pendingTaxUsd || 0), 1);
     body.innerHTML = rows
       .map((p) => {
         const logo = p.imageUrl
           ? '<img class="logo" src="' + escapeHtml(p.imageUrl) + '" onerror="this.outerHTML=\'<div class=logo-fallback>' + tokenInitial(p.symbol) + "</div>'\" />"
           : '<div class="logo-fallback">' + tokenInitial(p.symbol) + "</div>";
+        const pendingCell =
+          p.pendingTaxUsd === null
+            ? '<span style="color:var(--text-faint)">—</span>'
+            : (() => {
+                const pct = Math.max(4, Math.round((p.pendingTaxUsd / maxPending) * 100));
+                return (
+                  '<div class="pending-wrap"><span class="pending-amt">' +
+                  fmtUsd(p.pendingTaxUsd) +
+                  '</span><div class="pending-bar-track"><div class="pending-bar-fill" style="width:' +
+                  pct +
+                  '%"></div></div></div>'
+                );
+              })();
         const rowHtml =
           '<tr class="row" onclick="toggleExpand(\'' +
           p.mint +
@@ -495,17 +512,18 @@
           ageStr(p.createdAt) +
           "</span></td>" +
           "<td>" +
-          escapeHtml(p.quoteSymbol || "—") +
+          (p.holderCount === null ? '<span style="color:var(--text-faint)">—</span>' : p.holderCount.toLocaleString()) +
+          "</td>" +
+          "<td>" +
+          pendingCell +
+          "</td>" +
+          "<td>" +
+          (p.lastPayoutAt ? ageStr(p.lastPayoutAt) + " ago" : p.isRewardLaunch ? "never" : "—") +
           "</td>" +
           "<td>" +
           fmtUsd(p.volume24hUsd || 0) +
-          "</td>" +
-          '<td><span class="badge ' +
-          (p.isRewardLaunch ? "yes" : "no") +
-          '">' +
-          (p.isRewardLaunch ? "yes" : "no") +
-          "</span></td></tr>";
-        return rowHtml + (expandedMint === p.mint ? holderRowHtml(p.mint, 5) : "");
+          "</td></tr>";
+        return rowHtml + (expandedMint === p.mint ? holderRowHtml(p.mint, 6) : "");
       })
       .join("");
   }
