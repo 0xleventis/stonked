@@ -147,7 +147,37 @@ const COLUMNS: { key: SortKey; label: string }[] = [
   { key: "volume24hUsd", label: "24h vol" },
 ];
 
+type Theme = "system" | "light" | "dark";
+const THEME_KEY = "stonked-theme";
+
+function useTheme() {
+  const [theme, setTheme] = useState<Theme>("system");
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(THEME_KEY) as Theme | null;
+      if (saved === "light" || saved === "dark" || saved === "system") setTheme(saved);
+    } catch {
+      // Private browsing / blocked storage — falls back to "system" for this session, no crash.
+    }
+  }, []);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    if (theme === "system") root.removeAttribute("data-theme");
+    else root.setAttribute("data-theme", theme);
+    try {
+      localStorage.setItem(THEME_KEY, theme);
+    } catch {
+      // Same as above — persistence is a nice-to-have, not required for the toggle to work this session.
+    }
+  }, [theme]);
+
+  return [theme, setTheme] as const;
+}
+
 export default function Home() {
+  const [theme, setTheme] = useTheme();
   const [tab, setTab] = useState<"dormant" | "recent">("dormant");
   const [dormant, setDormant] = useState<DormantEntry[] | null>(null);
   const [recent, setRecent] = useState<Pool[] | null>(null);
@@ -231,9 +261,18 @@ export default function Home() {
             </div>
           </div>
         </div>
-        <div className="live-pill">
-          <span className="live-dot" />
-          <span>updated {lastUpdated}</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <button
+            className="theme-toggle"
+            title={`Theme: ${theme} (click to change)`}
+            onClick={() => setTheme(theme === "system" ? "light" : theme === "light" ? "dark" : "system")}
+          >
+            {theme === "light" ? "☀️ Light" : theme === "dark" ? "🌙 Dark" : "🖥️ Auto"}
+          </button>
+          <div className="live-pill">
+            <span className="live-dot" />
+            <span>updated {lastUpdated}</span>
+          </div>
         </div>
       </div>
 
