@@ -1,6 +1,7 @@
 {
   "crons": [{ "path": "/api/cron/scan", "schedule": "*/5 * * * *" }],
   "functions": {
-    "app/api/cron/scan/route.ts": { "maxDuration": 60 }
+    "app/api/cron/scan/route.ts": { "maxDuration": 60 },
+    "app/api/recent/route.ts": { "maxDuration": 60 }
   }
 }

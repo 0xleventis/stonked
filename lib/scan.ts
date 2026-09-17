@@ -1,5 +1,6 @@
 import { fetchPoolsPage, fetchRecentLaunches, fetchRewards, type StonkfunPool } from "./stonkfunApi";
 import { getScanCursor, setScanCursor, wasRecentlyChecked, markChecked, upsertDormant, removeDormant, type DormantEntry } from "./store";
+import { mapWithConcurrency } from "./concurrency";
 
 const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
 // "Dormant" candidate pre-filter, applied BEFORE the expensive per-mint /api/rewards call (checking all
@@ -47,6 +48,30 @@ export async function scanRecent(maxAgeMs = FOUR_HOURS_MS): Promise<StonkfunPool
     if (!anyInWindow) break;
   }
   return collected.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+}
+
+export interface EnrichedPool extends StonkfunPool {
+  holderCount: number | null;
+  pendingTaxUsd: number | null;
+  lastPayoutAt: string | null;
+}
+
+/** Adds the same fee-tracking fields the dormant list shows (holders, pending tax, last payout) to a
+ * recent-launches list — a brand new token can already be a reward launch accruing its first bit of tax.
+ * Bounded concurrency since this list (a time window, not the full 66k-token history) can still run into
+ * the hundreds on a busy day. Non-reward-launch tokens and any lookup failure just get nulls, not a
+ * thrown error for the whole list. */
+export async function enrichWithRewards(pools: StonkfunPool[], concurrency = 15): Promise<EnrichedPool[]> {
+  return mapWithConcurrency(pools, concurrency, async (p): Promise<EnrichedPool> => {
+    if (!p.isRewardLaunch) return { ...p, holderCount: null, pendingTaxUsd: null, lastPayoutAt: null };
+    try {
+      const rewards = await fetchRewards(p.mint);
+      if (!rewards) return { ...p, holderCount: null, pendingTaxUsd: null, lastPayoutAt: null };
+      return { ...p, holderCount: rewards.holderCount, pendingTaxUsd: rewards.pendingTaxUsd, lastPayoutAt: rewards.lastPayoutAt };
+    } catch {
+      return { ...p, holderCount: null, pendingTaxUsd: null, lastPayoutAt: null };
+    }
+  });
 }
 
 export interface DormantScanResult {
