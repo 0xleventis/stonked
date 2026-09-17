@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
-interface RecentPool {
+interface Pool {
   mint: string;
   name: string;
   symbol: string;
@@ -11,6 +11,9 @@ interface RecentPool {
   quoteSymbol: string;
   volume24hUsd: number;
   isRewardLaunch: boolean;
+  holderCount: number | null;
+  pendingTaxUsd: number | null;
+  lastPayoutAt: string | null;
 }
 
 interface DormantEntry {
@@ -35,22 +38,64 @@ interface Holder {
   owner: string | null;
 }
 
-function ageString(iso: string): string {
-  const ms = Date.now() - new Date(iso).getTime();
-  const mins = ms / 60000;
-  if (mins < 60) return `${mins.toFixed(0)}m`;
+type SortKey = "symbol" | "age" | "holderCount" | "pendingTaxUsd" | "lastPayoutAt" | "volume24hUsd";
+
+function ageMs(iso: string): number {
+  return Date.now() - new Date(iso).getTime();
+}
+function ageStr(iso: string): string {
+  const mins = ageMs(iso) / 60000;
+  if (mins < 60) return `${Math.round(mins)}m`;
   const hours = mins / 60;
   if (hours < 48) return `${hours.toFixed(1)}h`;
-  return `${(hours / 24).toFixed(0)}d`;
+  return `${Math.round(hours / 24)}d`;
 }
-
-function formatUsd(n: number): string {
+function fmtUsd(n: number | null): string {
+  if (n === null) return "—";
   return n.toLocaleString(undefined, { style: "currency", currency: "USD", maximumFractionDigits: n < 10 ? 4 : 2 });
 }
+function tokenInitial(symbol: string): string {
+  return (symbol || "?").charAt(0).toUpperCase();
+}
+function shortMint(mint: string): string {
+  return `${mint.slice(0, 4)}…${mint.slice(-4)}`;
+}
 
-function formatHolderAmount(raw: string, decimals: number): string {
-  const value = Number(raw) / 10 ** decimals;
-  return value.toLocaleString(undefined, { maximumFractionDigits: 2 });
+function sortRows<T extends { symbol: string; createdAt: string; holderCount: number | null; pendingTaxUsd: number | null; lastPayoutAt: string | null; volume24hUsd: number }>(
+  rows: T[],
+  key: SortKey,
+  dir: 1 | -1
+): T[] {
+  return [...rows].sort((a, b) => {
+    if (key === "symbol") return dir * a.symbol.localeCompare(b.symbol);
+    if (key === "age") return dir * (ageMs(a.createdAt) - ageMs(b.createdAt));
+    if (key === "lastPayoutAt") {
+      const av = a.lastPayoutAt ? new Date(a.lastPayoutAt).getTime() : -Infinity;
+      const bv = b.lastPayoutAt ? new Date(b.lastPayoutAt).getTime() : -Infinity;
+      return dir * (av - bv);
+    }
+    return dir * ((a[key] ?? 0) - (b[key] ?? 0));
+  });
+}
+
+function Logo({ imageUrl, symbol }: { imageUrl?: string; symbol: string }) {
+  const [failed, setFailed] = useState(false);
+  if (!imageUrl || failed) return <div className="logo-fallback">{tokenInitial(symbol)}</div>;
+  // eslint-disable-next-line @next/next/no-img-element
+  return <img className="logo" src={imageUrl} alt="" onError={() => setFailed(true)} />;
+}
+
+function PendingCell({ value, max }: { value: number | null; max: number }) {
+  if (value === null) return <span className="faint">—</span>;
+  const pct = Math.max(4, Math.round((value / max) * 100));
+  return (
+    <div className="pending-wrap">
+      <span className="pending-amt">{fmtUsd(value)}</span>
+      <div className="pending-bar-track">
+        <div className="pending-bar-fill" style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  );
 }
 
 function HolderList({ mint }: { mint: string }) {
@@ -72,127 +117,212 @@ function HolderList({ mint }: { mint: string }) {
     };
   }, [mint]);
 
-  if (error) return <div className="error">Couldn't load holders: {error}</div>;
-  if (!holders) return <div className="loading">Loading top holders…</div>;
-  if (holders.length === 0) return <div className="empty">No holder accounts found.</div>;
+  if (error) return <div className="state-msg error">Couldn't load holders: {error}</div>;
+  if (!holders) return <div className="state-msg">Loading top holders…</div>;
+  if (holders.length === 0) return <div className="state-msg">No holder accounts found.</div>;
 
   return (
-    <div style={{ padding: "8px 16px" }}>
+    <div className="holders-wrap">
+      <div className="holders-title">Top holders</div>
       {holders.map((h) => (
         <div className="holder-line" key={h.address}>
-          <span>{h.owner ?? h.address}</span>
-          <span className="amt">{formatHolderAmount(h.amountRaw, h.decimals)}</span>
+          <span className="holder-addr">{h.owner ?? h.address}</span>
+          <span className="holder-amt">{(Number(h.amountRaw) / 10 ** h.decimals).toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
         </div>
       ))}
     </div>
   );
 }
 
+const COLUMNS: { key: SortKey; label: string }[] = [
+  { key: "symbol", label: "Token" },
+  { key: "age", label: "Age" },
+  { key: "holderCount", label: "Holders" },
+  { key: "pendingTaxUsd", label: "Pending tax" },
+  { key: "lastPayoutAt", label: "Last payout" },
+  { key: "volume24hUsd", label: "24h vol" },
+];
+
 export default function Home() {
-  const [tab, setTab] = useState<"recent" | "dormant">("dormant");
-  const [recent, setRecent] = useState<RecentPool[] | null>(null);
+  const [tab, setTab] = useState<"dormant" | "recent">("dormant");
   const [dormant, setDormant] = useState<DormantEntry[] | null>(null);
+  const [recent, setRecent] = useState<Pool[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [sortKey, setSortKey] = useState<SortKey>("pendingTaxUsd");
+  const [sortDir, setSortDir] = useState<1 | -1>(-1);
+  const [lastUpdated, setLastUpdated] = useState<string>("connecting…");
 
   useEffect(() => {
     let cancelled = false;
     setError(null);
     const load = () => {
-      if (tab === "recent") {
-        fetch("/api/recent")
-          .then((res) => res.json())
-          .then((data: { pools?: RecentPool[]; error?: string }) => {
-            if (cancelled) return;
-            if (data.error) setError(data.error);
-            else setRecent(data.pools ?? []);
-          })
-          .catch((e) => !cancelled && setError(String(e)));
-      } else {
+      if (tab === "dormant") {
         fetch("/api/dormant")
           .then((res) => res.json())
           .then((data: { entries?: DormantEntry[]; error?: string }) => {
             if (cancelled) return;
             if (data.error) setError(data.error);
-            else setDormant(data.entries ?? []);
+            else {
+              setDormant(data.entries ?? []);
+              setLastUpdated(new Date().toLocaleTimeString());
+            }
+          })
+          .catch((e) => !cancelled && setError(String(e)));
+      } else {
+        fetch("/api/recent")
+          .then((res) => res.json())
+          .then((data: { pools?: Pool[]; error?: string }) => {
+            if (cancelled) return;
+            if (data.error) setError(data.error);
+            else {
+              setRecent(data.pools ?? []);
+              setLastUpdated(new Date().toLocaleTimeString());
+            }
           })
           .catch((e) => !cancelled && setError(String(e)));
       }
     };
     load();
-    const interval = setInterval(load, tab === "recent" ? 15_000 : 60_000);
+    const interval = setInterval(load, tab === "recent" ? 20_000 : 60_000);
     return () => {
       cancelled = true;
       clearInterval(interval);
     };
   }, [tab]);
 
+  function toggleSort(key: SortKey) {
+    if (key === sortKey) setSortDir((d) => (d === 1 ? -1 : 1) as 1 | -1);
+    else {
+      setSortKey(key);
+      setSortDir(key === "symbol" ? 1 : -1);
+    }
+  }
+
+  const totalPending = useMemo(() => (dormant ?? []).reduce((s, d) => s + d.pendingTaxUsd, 0), [dormant]);
+  const oldestStuck = useMemo(() => {
+    if (!dormant || dormant.length === 0) return null;
+    return dormant.reduce((a, b) => (ageMs(a.createdAt) > ageMs(b.createdAt) ? a : b));
+  }, [dormant]);
+
+  const rows = tab === "dormant" ? dormant ?? [] : recent ?? [];
+  const filtered = rows.filter(
+    (r) => !search.trim() || r.symbol.toLowerCase().includes(search.toLowerCase()) || r.mint.toLowerCase().includes(search.toLowerCase()) || r.name.toLowerCase().includes(search.toLowerCase())
+  );
+  const sorted = sortRows(filtered, sortKey, sortDir);
+  const maxPending = Math.max(...rows.map((r) => r.pendingTaxUsd ?? 0), 1);
+
   return (
-    <div className="wrap">
-      <div className="title">$ stonk-hounds</div>
-      <div className="subtitle">
-        Tokens on stonk.fun that are either brand new (&lt;4h old) or dormant with fee revenue piling up unclaimed. Not limited to Bruno launches.
+    <div className="page">
+      <div className="topbar">
+        <div className="brand">
+          <div className="brand-mark">🐕</div>
+          <div>
+            <div className="brand-name">Stonk Hounds</div>
+            <div className="brand-sub">
+              Live surveillance of stonk.fun&rsquo;s full token history — dormant tokens with real, unclaimed fee revenue piling up, and everything
+              launched in the last 4 hours. Not limited to any one launchpad&rsquo;s own tokens.
+            </div>
+          </div>
+        </div>
+        <div className="live-pill">
+          <span className="live-dot" />
+          <span>updated {lastUpdated}</span>
+        </div>
+      </div>
+
+      <div className="stats">
+        <div className="stat">
+          <div className="stat-label">Unclaimed fees tracked</div>
+          <div className="stat-value accent">{fmtUsd(totalPending)}</div>
+          <div className="stat-note">Across dormant reward-launch tokens</div>
+        </div>
+        <div className="stat">
+          <div className="stat-label">Dormant tokens found</div>
+          <div className="stat-value">{dormant ? dormant.length.toLocaleString() : "—"}</div>
+          <div className="stat-note">Scanned so far, updates continuously</div>
+        </div>
+        <div className="stat">
+          <div className="stat-label">Launched, last 4h</div>
+          <div className="stat-value">{recent ? recent.length.toLocaleString() : "—"}</div>
+          <div className="stat-note">Across every stonk.fun launch</div>
+        </div>
+        <div className="stat">
+          <div className="stat-label">Oldest stuck token</div>
+          <div className="stat-value">{oldestStuck ? ageStr(oldestStuck.createdAt) : "—"}</div>
+          <div className="stat-note">Since last fee sweep</div>
+        </div>
       </div>
 
       <div className="tabs">
         <button className={`tab ${tab === "dormant" ? "active" : ""}`} onClick={() => setTab("dormant")}>
-          Dormant + pending fees{dormant ? ` (${dormant.length})` : ""}
+          Dormant fees <span className="count">{dormant ? `(${dormant.length})` : ""}</span>
         </button>
         <button className={`tab ${tab === "recent" ? "active" : ""}`} onClick={() => setTab("recent")}>
-          Recent (&lt;4h){recent ? ` (${recent.length})` : ""}
+          Recent launches <span className="count">{recent ? `(${recent.length})` : ""}</span>
         </button>
       </div>
 
+      <div className="toolbar">
+        <input className="search" placeholder="Search by symbol or mint…" value={search} onChange={(e) => setSearch(e.target.value)} />
+        <span className="refresh-note">auto-refreshing</span>
+      </div>
+
       <div className="panel">
-        {error && <div className="error">{error}</div>}
-
-        {tab === "dormant" && (
+        {error && <div className="state-msg error">{error}</div>}
+        {!error && (
           <table>
             <thead>
               <tr>
-                <th>Token</th>
-                <th>Age</th>
-                <th>Holders</th>
-                <th>Pending tax</th>
-                <th>Last payout</th>
-                <th>24h vol</th>
+                {COLUMNS.map((c) => (
+                  <th key={c.key} onClick={() => toggleSort(c.key)}>
+                    {c.label}
+                    {sortKey === c.key ? (sortDir === 1 ? " ▴" : " ▾") : ""}
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
-              {dormant === null && (
+              {rows.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="loading">
-                    Loading…
+                  <td colSpan={6} className="state-msg">
+                    {tab === "dormant"
+                      ? dormant === null
+                        ? "Loading…"
+                        : "No dormant tokens match yet — the background scanner is still working through stonk.fun's full history."
+                      : recent === null
+                        ? "Loading…"
+                        : "Nothing launched in the last 4 hours."}
                   </td>
                 </tr>
               )}
-              {dormant?.length === 0 && (
-                <tr>
-                  <td colSpan={6} className="empty">
-                    No dormant tokens with pending fees found yet — the background scanner is still working through
-                    stonk.fun's full history.
-                  </td>
-                </tr>
-              )}
-              {dormant?.map((d) => (
+              {sorted.map((r) => (
                 <>
-                  <tr className="row" key={d.mint} onClick={() => setExpanded(expanded === d.mint ? null : d.mint)}>
+                  <tr className="row" key={r.mint} onClick={() => setExpanded(expanded === r.mint ? null : r.mint)}>
                     <td>
-                      <span className="sym">{d.symbol}</span>{" "}
-                      <a className="mint-link" href={`https://www.stonkfun.xyz/token/${d.mint}`} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
-                        {d.mint.slice(0, 4)}…{d.mint.slice(-4)}
-                      </a>
+                      <div className="token-cell">
+                        <Logo imageUrl={r.imageUrl} symbol={r.symbol} />
+                        <div>
+                          <div className="token-name">{r.symbol}</div>
+                          <a className="token-mint" href={`https://www.stonkfun.xyz/token/${r.mint}`} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
+                            {shortMint(r.mint)}
+                          </a>
+                        </div>
+                      </div>
                     </td>
-                    <td className="age-old">{ageString(d.createdAt)}</td>
-                    <td>{d.holderCount.toLocaleString()}</td>
-                    <td className="pending">{formatUsd(d.pendingTaxUsd)}</td>
-                    <td>{d.lastPayoutAt ? ageString(d.lastPayoutAt) + " ago" : "never"}</td>
-                    <td>{formatUsd(d.volume24hUsd)}</td>
+                    <td>{tab === "dormant" ? <span className="age-dim">{ageStr(r.createdAt)}</span> : <span className="badge fresh">{ageStr(r.createdAt)}</span>}</td>
+                    <td>{r.holderCount === null ? <span className="faint">—</span> : r.holderCount.toLocaleString()}</td>
+                    <td>
+                      <PendingCell value={r.pendingTaxUsd} max={maxPending} />
+                    </td>
+                    <td>{r.lastPayoutAt ? `${ageStr(r.lastPayoutAt)} ago` : "isRewardLaunch" in r && !r.isRewardLaunch ? <span className="faint">—</span> : "never"}</td>
+                    <td>{fmtUsd(r.volume24hUsd)}</td>
                   </tr>
-                  {expanded === d.mint && (
-                    <tr className="holders-row" key={d.mint + "-holders"}>
+                  {expanded === r.mint && (
+                    <tr className="holders-row" key={`${r.mint}-holders`}>
                       <td colSpan={6}>
-                        <HolderList mint={d.mint} />
+                        <HolderList mint={r.mint} />
                       </td>
                     </tr>
                   )}
@@ -201,59 +331,10 @@ export default function Home() {
             </tbody>
           </table>
         )}
+      </div>
 
-        {tab === "recent" && (
-          <table>
-            <thead>
-              <tr>
-                <th>Token</th>
-                <th>Age</th>
-                <th>Quote</th>
-                <th>24h vol</th>
-                <th>Reward launch</th>
-              </tr>
-            </thead>
-            <tbody>
-              {recent === null && (
-                <tr>
-                  <td colSpan={5} className="loading">
-                    Loading…
-                  </td>
-                </tr>
-              )}
-              {recent?.length === 0 && (
-                <tr>
-                  <td colSpan={5} className="empty">
-                    Nothing launched in the last 4 hours.
-                  </td>
-                </tr>
-              )}
-              {recent?.map((p) => (
-                <>
-                  <tr className="row" key={p.mint} onClick={() => setExpanded(expanded === p.mint ? null : p.mint)}>
-                    <td>
-                      <span className="sym">{p.symbol}</span>{" "}
-                      <a className="mint-link" href={`https://www.stonkfun.xyz/token/${p.mint}`} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
-                        {p.mint.slice(0, 4)}…{p.mint.slice(-4)}
-                      </a>
-                    </td>
-                    <td className="age-fresh">{ageString(p.createdAt)}</td>
-                    <td>{p.quoteSymbol}</td>
-                    <td>{formatUsd(p.volume24hUsd ?? 0)}</td>
-                    <td>{p.isRewardLaunch ? "yes" : "no"}</td>
-                  </tr>
-                  {expanded === p.mint && (
-                    <tr className="holders-row" key={p.mint + "-holders"}>
-                      <td colSpan={5}>
-                        <HolderList mint={p.mint} />
-                      </td>
-                    </tr>
-                  )}
-                </>
-              ))}
-            </tbody>
-          </table>
-        )}
+      <div className="footer-note">
+        Data from stonk.fun&rsquo;s own public API + Solana RPC. Not affiliated with stonk.fun.
       </div>
     </div>
   );
