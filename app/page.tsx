@@ -221,9 +221,10 @@ export default function Home() {
     <div className="page">
       <div className="topbar">
         <div className="brand">
-          <div className="brand-mark">🐕</div>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img className="brand-mark" src="/logo-64.png" alt="Stonk Stuck" />
           <div>
-            <div className="brand-name">Stonk Hounds</div>
+            <div className="brand-name">Stonk Stuck</div>
             <div className="brand-sub">
               Live surveillance of stonk.fun&rsquo;s full token history — dormant tokens with real, unclaimed fee revenue piling up, and everything
               launched in the last 4 hours. Not limited to any one launchpad&rsquo;s own tokens.

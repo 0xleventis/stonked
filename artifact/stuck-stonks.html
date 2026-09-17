@@ -1,4 +1,4 @@
-<title>Stonk Hounds</title>
+<title>Stonk Stuck</title>
 <style>
   :root {
     --bg: #f7f8fa;
@@ -70,8 +70,9 @@
   .topbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 22px; }
   .brand { display: flex; align-items: center; gap: 10px; }
   .brand-mark {
-    width: 34px; height: 34px; border-radius: 9px; background: linear-gradient(135deg, var(--accent), var(--accent-strong));
-    display: flex; align-items: center; justify-content: center; font-size: 16px; box-shadow: var(--shadow);
+    /* Solid white always (not theme-following) — the logo is black line art on a white background. */
+    width: 34px; height: 34px; border-radius: 9px; background: #ffffff; padding: 3px;
+    box-shadow: var(--shadow); object-fit: contain;
   }
   .brand-name { font-size: 18px; font-weight: 700; letter-spacing: -0.01em; }
   .brand-sub { font-size: 12.5px; color: var(--text-dim); margin-top: 1px; max-width: 520px; line-height: 1.4; }
@@ -195,9 +196,9 @@
 <div class="page">
   <div class="topbar">
     <div class="brand">
-      <div class="brand-mark">🐕</div>
+      <img class="brand-mark" src="logo.png" alt="Stonk Stuck" />
       <div>
-        <div class="brand-name">Stonk Hounds</div>
+        <div class="brand-name">Stonk Stuck</div>
         <div class="brand-sub">
           Live surveillance of stonk.fun's full token history — dormant tokens with real, unclaimed fee revenue piling up,
           and everything launched in the last 4 hours. Not limited to any one launchpad's own tokens.
