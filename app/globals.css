@@ -107,6 +107,13 @@ html, body {
 .tab.active { background: var(--accent); color: #04241f; border-color: var(--accent); }
 .tab .count { opacity: 0.75; font-weight: 500; }
 
+.star-btn {
+  background: none; border: none; cursor: pointer; font-size: 17px; line-height: 1; padding: 4px;
+  color: var(--text-faint); font-family: inherit;
+}
+.star-btn:hover { color: var(--warn); }
+.star-btn.on { color: var(--warn); }
+
 .toolbar { display: flex; gap: 10px; margin-bottom: 12px; align-items: center; flex-wrap: wrap; }
 .search {
   flex: 1; min-width: 180px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px;

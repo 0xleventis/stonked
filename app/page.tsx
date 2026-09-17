@@ -38,6 +38,15 @@ interface Holder {
   owner: string | null;
 }
 
+// The watchlist API returns full pool shape (StonkfunPool fields) plus the same fee-tracking fields Pool
+// already has — Pool's fields are a subset, so extending it is enough for every render/sort path below to
+// just work. `notFound` flags a starred mint stonk.fun no longer has a pool for, so the row can say so
+// instead of rendering nonsense (epoch-zero age, etc.) from the placeholder record the API sends back.
+interface WatchlistEntry extends Pool {
+  notFound?: boolean;
+}
+
+type Tab = "dormant" | "recent" | "watchlist";
 type SortKey = "symbol" | "age" | "holderCount" | "pendingTaxUsd" | "lastPayoutAt" | "volume24hUsd";
 
 function ageMs(iso: string): number {
@@ -87,6 +96,21 @@ function Logo({ imageUrl, symbol }: { imageUrl?: string; symbol: string }) {
   if (!imageUrl || failed) return <div className="logo-fallback">{tokenInitial(symbol)}</div>;
   // eslint-disable-next-line @next/next/no-img-element
   return <img className="logo" src={imageUrl} alt="" onError={() => setFailed(true)} />;
+}
+
+function StarButton({ watched, onToggle }: { watched: boolean; onToggle: () => void }) {
+  return (
+    <button
+      className={`star-btn ${watched ? "on" : ""}`}
+      title={watched ? "Remove from watchlist" : "Add to watchlist"}
+      onClick={(e) => {
+        e.stopPropagation();
+        onToggle();
+      }}
+    >
+      {watched ? "★" : "☆"}
+    </button>
+  );
 }
 
 function PendingCell({ value, max }: { value: number | null | undefined; max: number }) {
@@ -147,6 +171,42 @@ const COLUMNS: { key: SortKey; label: string }[] = [
   { key: "volume24hUsd", label: "24h vol" },
 ];
 
+const WATCHLIST_KEY = "stonked-watchlist";
+
+// Client-side-only (localStorage), per-viewer — a starred list is always small and personal, so there's no
+// server-side storage to design around. The Set is hydrated async on mount; `hydrated` lets callers avoid
+// firing the initial watchlist fetch with an empty set before localStorage has actually been read.
+function useWatchlist() {
+  const [watched, setWatched] = useState<Set<string>>(new Set());
+  const [hydrated, setHydrated] = useState(false);
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(WATCHLIST_KEY);
+      if (saved) setWatched(new Set(JSON.parse(saved) as string[]));
+    } catch {
+      // Private browsing / blocked storage / corrupt value — falls back to an empty watchlist, no crash.
+    }
+    setHydrated(true);
+  }, []);
+
+  function toggle(mint: string) {
+    setWatched((prev) => {
+      const next = new Set(prev);
+      if (next.has(mint)) next.delete(mint);
+      else next.add(mint);
+      try {
+        localStorage.setItem(WATCHLIST_KEY, JSON.stringify([...next]));
+      } catch {
+        // Same as above — persistence is a nice-to-have, not required for the toggle to work this session.
+      }
+      return next;
+    });
+  }
+
+  return { watched, toggle, hydrated };
+}
+
 type Theme = "system" | "light" | "dark";
 const THEME_KEY = "stonked-theme";
 
@@ -178,9 +238,11 @@ function useTheme() {
 
 export default function Home() {
   const [theme, setTheme] = useTheme();
-  const [tab, setTab] = useState<"dormant" | "recent">("dormant");
+  const { watched, toggle: toggleWatch, hydrated: watchlistHydrated } = useWatchlist();
+  const [tab, setTab] = useState<Tab>("dormant");
   const [dormant, setDormant] = useState<DormantEntry[] | null>(null);
   const [recent, setRecent] = useState<Pool[] | null>(null);
+  const [watchlist, setWatchlist] = useState<WatchlistEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -189,6 +251,7 @@ export default function Home() {
   const [lastUpdated, setLastUpdated] = useState<string>("connecting…");
 
   useEffect(() => {
+    if (tab === "watchlist") return;
     let cancelled = false;
     setError(null);
     const load = () => {
@@ -226,6 +289,39 @@ export default function Home() {
     };
   }, [tab]);
 
+  // Separate from the effect above since it depends on `watched` (re-fetches live whenever a star is
+  // toggled while this tab is open) — folding it into the same effect would also re-fetch dormant/recent
+  // on every star toggle, which is pointless work.
+  useEffect(() => {
+    if (tab !== "watchlist" || !watchlistHydrated) return;
+    let cancelled = false;
+    setError(null);
+    const load = () => {
+      if (watched.size === 0) {
+        setWatchlist([]);
+        setLastUpdated(new Date().toLocaleTimeString());
+        return;
+      }
+      fetch(`/api/watchlist?mints=${[...watched].join(",")}`)
+        .then((res) => res.json())
+        .then((data: { pools?: WatchlistEntry[]; error?: string }) => {
+          if (cancelled) return;
+          if (data.error) setError(data.error);
+          else {
+            setWatchlist(data.pools ?? []);
+            setLastUpdated(new Date().toLocaleTimeString());
+          }
+        })
+        .catch((e) => !cancelled && setError(String(e)));
+    };
+    load();
+    const interval = setInterval(load, 15_000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [tab, watched, watchlistHydrated]);
+
   function toggleSort(key: SortKey) {
     if (key === sortKey) setSortDir((d) => (d === 1 ? -1 : 1) as 1 | -1);
     else {
@@ -240,7 +336,7 @@ export default function Home() {
     return dormant.reduce((a, b) => (ageMs(a.createdAt) > ageMs(b.createdAt) ? a : b));
   }, [dormant]);
 
-  const rows = tab === "dormant" ? dormant ?? [] : recent ?? [];
+  const rows = tab === "dormant" ? dormant ?? [] : tab === "recent" ? recent ?? [] : watchlist ?? [];
   const filtered = rows.filter(
     (r) => !search.trim() || r.symbol.toLowerCase().includes(search.toLowerCase()) || r.mint.toLowerCase().includes(search.toLowerCase()) || r.name.toLowerCase().includes(search.toLowerCase())
   );
@@ -306,6 +402,9 @@ export default function Home() {
         <button className={`tab ${tab === "recent" ? "active" : ""}`} onClick={() => setTab("recent")}>
           Recent launches <span className="count">{recent ? `(${recent.length})` : ""}</span>
         </button>
+        <button className={`tab ${tab === "watchlist" ? "active" : ""}`} onClick={() => setTab("watchlist")}>
+          ★ Watchlist <span className="count">{`(${watched.size})`}</span>
+        </button>
       </div>
 
       <div className="toolbar">
@@ -319,6 +418,7 @@ export default function Home() {
           <table>
             <thead>
               <tr>
+                <th></th>
                 {COLUMNS.map((c) => (
                   <th key={c.key} onClick={() => toggleSort(c.key)}>
                     {c.label}
@@ -330,48 +430,68 @@ export default function Home() {
             <tbody>
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="state-msg">
+                  <td colSpan={7} className="state-msg">
                     {tab === "dormant"
                       ? dormant === null
                         ? "Loading…"
                         : "No dormant tokens match yet — the background scanner is still working through stonk.fun's full history."
-                      : recent === null
-                        ? "Loading…"
-                        : "Nothing launched in the last 4 hours."}
+                      : tab === "recent"
+                        ? recent === null
+                          ? "Loading…"
+                          : "Nothing launched in the last 4 hours."
+                        : watched.size === 0
+                          ? "Nothing starred yet — click the ☆ next to any token to add it here."
+                          : watchlist === null
+                            ? "Loading…"
+                            : "No starred tokens matched."}
                   </td>
                 </tr>
               )}
-              {sorted.map((r) => (
-                <>
-                  <tr className="row" key={r.mint} onClick={() => setExpanded(expanded === r.mint ? null : r.mint)}>
-                    <td>
-                      <div className="token-cell">
-                        <Logo imageUrl={r.imageUrl} symbol={r.symbol} />
-                        <div>
-                          <div className="token-name">{r.symbol}</div>
-                          <a className="token-mint" href={`https://www.stonkfun.xyz/token/${r.mint}`} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
-                            {shortMint(r.mint)}
-                          </a>
-                        </div>
-                      </div>
-                    </td>
-                    <td>{tab === "dormant" ? <span className="age-dim">{ageStr(r.createdAt)}</span> : <span className="badge fresh">{ageStr(r.createdAt)}</span>}</td>
-                    <td>{r.holderCount == null ? <span className="faint">—</span> : r.holderCount.toLocaleString()}</td>
-                    <td>
-                      <PendingCell value={r.pendingTaxUsd} max={maxPending} />
-                    </td>
-                    <td>{r.lastPayoutAt ? `${ageStr(r.lastPayoutAt)} ago` : "isRewardLaunch" in r && !r.isRewardLaunch ? <span className="faint">—</span> : "never"}</td>
-                    <td>{fmtUsd(r.volume24hUsd)}</td>
-                  </tr>
-                  {expanded === r.mint && (
-                    <tr className="holders-row" key={`${r.mint}-holders`}>
-                      <td colSpan={6}>
-                        <HolderList mint={r.mint} />
+              {sorted.map((r) => {
+                const notFound = tab === "watchlist" && "notFound" in r && (r as WatchlistEntry).notFound;
+                return (
+                  <>
+                    <tr className="row" key={r.mint} onClick={() => !notFound && setExpanded(expanded === r.mint ? null : r.mint)}>
+                      <td onClick={(e) => e.stopPropagation()}>
+                        <StarButton watched={watched.has(r.mint)} onToggle={() => toggleWatch(r.mint)} />
                       </td>
+                      <td>
+                        <div className="token-cell">
+                          <Logo imageUrl={r.imageUrl} symbol={r.symbol} />
+                          <div>
+                            <div className="token-name">{notFound ? shortMint(r.mint) : r.symbol}</div>
+                            <a className="token-mint" href={`https://www.stonkfun.xyz/token/${r.mint}`} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
+                              {shortMint(r.mint)}
+                            </a>
+                          </div>
+                        </div>
+                      </td>
+                      {notFound ? (
+                        <td colSpan={5} className="state-msg">
+                          No longer found on stonk.fun — the pool may have been removed.
+                        </td>
+                      ) : (
+                        <>
+                          <td>{tab === "dormant" ? <span className="age-dim">{ageStr(r.createdAt)}</span> : <span className="badge fresh">{ageStr(r.createdAt)}</span>}</td>
+                          <td>{r.holderCount == null ? <span className="faint">—</span> : r.holderCount.toLocaleString()}</td>
+                          <td>
+                            <PendingCell value={r.pendingTaxUsd} max={maxPending} />
+                          </td>
+                          <td>{r.lastPayoutAt ? `${ageStr(r.lastPayoutAt)} ago` : "isRewardLaunch" in r && !r.isRewardLaunch ? <span className="faint">—</span> : "never"}</td>
+                          <td>{fmtUsd(r.volume24hUsd)}</td>
+                        </>
+                      )}
                     </tr>
-                  )}
-                </>
-              ))}
+                    {!notFound && expanded === r.mint && (
+                      <tr className="holders-row" key={`${r.mint}-holders`}>
+                        <td colSpan={7}>
+                          <HolderList mint={r.mint} />
+                        </td>
+                      </tr>
+                    )}
+                  </>
+                );
+              })}
             </tbody>
           </table>
         )}

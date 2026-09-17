@@ -114,6 +114,13 @@
   :root[data-theme="dark"] .tab.active, @media (prefers-color-scheme: dark) { }
   .tab .count { opacity: 0.75; font-weight: 500; }
 
+  .star-btn {
+    background: none; border: none; cursor: pointer; font-size: 17px; line-height: 1; padding: 4px;
+    color: var(--text-faint); font-family: inherit;
+  }
+  .star-btn:hover { color: var(--warn); }
+  .star-btn.on { color: var(--warn); }
+
   .toolbar { display: flex; gap: 10px; margin-bottom: 12px; align-items: center; flex-wrap: wrap; }
   .search {
     flex: 1; min-width: 180px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
@@ -244,6 +251,7 @@
   <div class="tabs">
     <button class="tab active" data-tab="dormant" id="tabDormantBtn">Dormant fees <span class="count" id="tabDormantCount"></span></button>
     <button class="tab" data-tab="recent" id="tabRecentBtn">Recent launches <span class="count" id="tabRecentCount"></span></button>
+    <button class="tab" data-tab="watchlist" id="tabWatchlistBtn">★ Watchlist <span class="count" id="tabWatchlistCount"></span></button>
   </div>
 
   <div class="toolbar">
@@ -255,6 +263,7 @@
     <table id="dormantTable">
       <thead>
         <tr>
+          <th></th>
           <th data-sort="symbol">Token</th>
           <th data-sort="age">Age</th>
           <th data-sort="holderCount">Holders</th>
@@ -268,6 +277,7 @@
     <table id="recentTable" style="display: none">
       <thead>
         <tr>
+          <th></th>
           <th data-sort="symbol">Token</th>
           <th data-sort="age">Age</th>
           <th data-sort="holderCount">Holders</th>
@@ -277,6 +287,20 @@
         </tr>
       </thead>
       <tbody id="recentBody"></tbody>
+    </table>
+    <table id="watchlistTable" style="display: none">
+      <thead>
+        <tr>
+          <th></th>
+          <th data-sort="symbol">Token</th>
+          <th data-sort="age">Age</th>
+          <th data-sort="holderCount">Holders</th>
+          <th data-sort="pendingTaxUsd">Pending tax</th>
+          <th data-sort="lastPayoutAt">Last payout</th>
+          <th data-sort="volume24hUsd">24h vol</th>
+        </tr>
+      </thead>
+      <tbody id="watchlistBody"></tbody>
     </table>
   </div>
 
@@ -321,10 +345,51 @@
   let tab = "dormant";
   let dormantData = [];
   let recentData = [];
+  let watchlistData = null;
   let sortKey = "pendingTaxUsd";
   let sortDir = -1;
   let expandedMint = null;
   let holderCache = {};
+
+  // Client-side-only (localStorage), per-viewer — a starred list is always small and personal, so there's
+  // no server-side storage to design around.
+  const WATCHLIST_KEY = "stonked-watchlist";
+  let watched = new Set();
+  try {
+    const saved = localStorage.getItem(WATCHLIST_KEY);
+    if (saved) watched = new Set(JSON.parse(saved));
+  } catch {
+    // Private browsing / blocked storage / corrupt value — falls back to an empty watchlist, no crash.
+  }
+  function saveWatched() {
+    try {
+      localStorage.setItem(WATCHLIST_KEY, JSON.stringify([...watched]));
+    } catch {
+      // Same as above — persistence is a nice-to-have, not required for the toggle to work this session.
+    }
+  }
+  function toggleWatch(mint) {
+    if (watched.has(mint)) watched.delete(mint);
+    else watched.add(mint);
+    saveWatched();
+    if (tab === "watchlist") loadWatchlist();
+    else renderCurrentTab();
+    renderStats();
+  }
+  function starCellHtml(mint) {
+    const on = watched.has(mint);
+    return (
+      '<td onclick="event.stopPropagation()"><button class="star-btn' +
+      (on ? " on" : "") +
+      '" onclick="toggleWatch(\'' +
+      mint +
+      "')\" title=\"" +
+      (on ? "Remove from watchlist" : "Add to watchlist") +
+      '">' +
+      (on ? "★" : "☆") +
+      "</button></td>"
+    );
+  }
 
   function fmtUsd(n) {
     if (n === null || n === undefined) return "—";
@@ -368,7 +433,7 @@
       renderDormant();
     } catch (e) {
       document.getElementById("dormantBody").innerHTML =
-        '<tr><td colspan="6" class="state-msg error">Couldn\'t load dormant tokens: ' + escapeHtml(e.message) + "</td></tr>";
+        '<tr><td colspan="7" class="state-msg error">Couldn\'t load dormant tokens: ' + escapeHtml(e.message) + "</td></tr>";
     }
   }
 
@@ -380,7 +445,28 @@
       renderRecent();
     } catch (e) {
       document.getElementById("recentBody").innerHTML =
-        '<tr><td colspan="5" class="state-msg error">Couldn\'t load recent launches: ' + escapeHtml(e.message) + "</td></tr>";
+        '<tr><td colspan="7" class="state-msg error">Couldn\'t load recent launches: ' + escapeHtml(e.message) + "</td></tr>";
+    }
+  }
+
+  // Live — re-fetches fresh on every call rather than depending on a cache, since the whole point of
+  // starring something is to check on it right now. Never more than 50 mints (client-enforced watchlist
+  // size), so no pagination needed.
+  async function loadWatchlist() {
+    if (watched.size === 0) {
+      watchlistData = [];
+      renderStats();
+      renderWatchlist();
+      return;
+    }
+    try {
+      const data = await fetchJson("/watchlist?mints=" + [...watched].join(","));
+      watchlistData = data.pools || [];
+      renderStats();
+      renderWatchlist();
+    } catch (e) {
+      document.getElementById("watchlistBody").innerHTML =
+        '<tr><td colspan="7" class="state-msg error">Couldn\'t load watchlist: ' + escapeHtml(e.message) + "</td></tr>";
     }
   }
 
@@ -391,6 +477,7 @@
     document.getElementById("statRecentCount").textContent = recentData.length.toLocaleString();
     document.getElementById("tabDormantCount").textContent = dormantData.length ? "(" + dormantData.length + ")" : "";
     document.getElementById("tabRecentCount").textContent = recentData.length ? "(" + recentData.length + ")" : "";
+    document.getElementById("tabWatchlistCount").textContent = "(" + watched.size + ")";
     if (dormantData.length) {
       const oldest = dormantData.reduce((a, b) => (ageMs(a.createdAt) > ageMs(b.createdAt) ? a : b));
       document.getElementById("statOldest").textContent = ageStr(oldest.createdAt);
@@ -466,7 +553,7 @@
     const body = document.getElementById("dormantBody");
     if (rows.length === 0) {
       body.innerHTML =
-        '<tr><td colspan="6" class="state-msg">No dormant tokens match yet — the background scanner is still working through stonk.fun\'s full history.</td></tr>';
+        '<tr><td colspan="7" class="state-msg">No dormant tokens match yet — the background scanner is still working through stonk.fun\'s full history.</td></tr>';
       return;
     }
     const maxPending = Math.max(...dormantData.map((d) => d.pendingTaxUsd || 0), 1);
@@ -479,7 +566,9 @@
         const rowHtml =
           '<tr class="row" onclick="toggleExpand(\'' +
           d.mint +
-          '\')"><td><div class="token-cell">' +
+          "')\">" +
+          starCellHtml(d.mint) +
+          '<td><div class="token-cell">' +
           logo +
           '<div><div class="token-name">' +
           escapeHtml(d.symbol) +
@@ -505,7 +594,7 @@
           "<td>" +
           fmtUsd(d.volume24hUsd) +
           "</td></tr>";
-        return rowHtml + (expandedMint === d.mint ? holderRowHtml(d.mint, 6) : "");
+        return rowHtml + (expandedMint === d.mint ? holderRowHtml(d.mint, 7) : "");
       })
       .join("");
   }
@@ -516,7 +605,7 @@
     const rows = sortRows(recentData.filter(matchesSearch), key, dir);
     const body = document.getElementById("recentBody");
     if (rows.length === 0) {
-      body.innerHTML = '<tr><td colspan="6" class="state-msg">Nothing launched in the last 4 hours.</td></tr>';
+      body.innerHTML = '<tr><td colspan="7" class="state-msg">Nothing launched in the last 4 hours.</td></tr>';
       return;
     }
     const maxPending = Math.max(...recentData.map((p) => p.pendingTaxUsd || 0), 1);
@@ -541,7 +630,9 @@
         const rowHtml =
           '<tr class="row" onclick="toggleExpand(\'' +
           p.mint +
-          '\')"><td><div class="token-cell">' +
+          "')\">" +
+          starCellHtml(p.mint) +
+          '<td><div class="token-cell">' +
           logo +
           '<div><div class="token-name">' +
           escapeHtml(p.symbol) +
@@ -565,27 +656,105 @@
           "<td>" +
           fmtUsd(p.volume24hUsd || 0) +
           "</td></tr>";
-        return rowHtml + (expandedMint === p.mint ? holderRowHtml(p.mint, 6) : "");
+        return rowHtml + (expandedMint === p.mint ? holderRowHtml(p.mint, 7) : "");
+      })
+      .join("");
+  }
+
+  function renderWatchlist() {
+    const body = document.getElementById("watchlistBody");
+    if (watched.size === 0) {
+      body.innerHTML = '<tr><td colspan="7" class="state-msg">Nothing starred yet — click the ☆ next to any token to add it here.</td></tr>';
+      return;
+    }
+    if (watchlistData === null) {
+      body.innerHTML = '<tr><td colspan="7" class="state-msg">Loading…</td></tr>';
+      return;
+    }
+    const rows = sortRows(watchlistData.filter(matchesSearch), sortKey, sortDir);
+    if (rows.length === 0) {
+      body.innerHTML = '<tr><td colspan="7" class="state-msg">No starred tokens matched.</td></tr>';
+      return;
+    }
+    const maxPending = Math.max(...watchlistData.map((p) => p.pendingTaxUsd || 0), 1);
+    body.innerHTML = rows
+      .map((p) => {
+        if (p.notFound) {
+          return (
+            '<tr class="row"><td onclick="event.stopPropagation()"><button class="star-btn on" onclick="toggleWatch(\'' +
+            p.mint +
+            '\')" title="Remove from watchlist">★</button></td>' +
+            '<td><div class="token-cell"><div class="logo-fallback">?</div><div><div class="token-name">' +
+            shortMint(p.mint) +
+            '</div><a class="token-mint" href="https://www.stonkfun.xyz/token/' +
+            p.mint +
+            '" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">' +
+            shortMint(p.mint) +
+            "</a></div></div></td>" +
+            '<td colspan="5" class="state-msg">No longer found on stonk.fun — the pool may have been removed.</td></tr>'
+          );
+        }
+        const pct = Math.max(4, Math.round(((p.pendingTaxUsd || 0) / maxPending) * 100));
+        const logo = p.imageUrl
+          ? '<img class="logo" src="' + escapeHtml(p.imageUrl) + '" onerror="this.outerHTML=\'<div class=logo-fallback>' + tokenInitial(p.symbol) + "</div>'\" />"
+          : '<div class="logo-fallback">' + tokenInitial(p.symbol) + "</div>";
+        const rowHtml =
+          '<tr class="row" onclick="toggleExpand(\'' +
+          p.mint +
+          "')\">" +
+          starCellHtml(p.mint) +
+          '<td><div class="token-cell">' +
+          logo +
+          '<div><div class="token-name">' +
+          escapeHtml(p.symbol) +
+          '</div><a class="token-mint" href="https://www.stonkfun.xyz/token/' +
+          p.mint +
+          '" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">' +
+          shortMint(p.mint) +
+          "</a></div></div></td>" +
+          '<td class="age-dim">' +
+          ageStr(p.createdAt) +
+          "</td>" +
+          "<td>" +
+          (p.holderCount === null || p.holderCount === undefined ? '<span style="color:var(--text-faint)">—</span>' : p.holderCount.toLocaleString()) +
+          "</td>" +
+          '<td><div class="pending-wrap"><span class="pending-amt">' +
+          fmtUsd(p.pendingTaxUsd) +
+          '</span><div class="pending-bar-track"><div class="pending-bar-fill" style="width:' +
+          pct +
+          '%"></div></div></div></td>' +
+          "<td>" +
+          (p.lastPayoutAt ? ageStr(p.lastPayoutAt) + " ago" : p.isRewardLaunch ? "never" : "—") +
+          "</td>" +
+          "<td>" +
+          fmtUsd(p.volume24hUsd || 0) +
+          "</td></tr>";
+        return rowHtml + (expandedMint === p.mint ? holderRowHtml(p.mint, 7) : "");
       })
       .join("");
   }
 
   function renderCurrentTab() {
     if (tab === "dormant") renderDormant();
-    else renderRecent();
+    else if (tab === "recent") renderRecent();
+    else renderWatchlist();
   }
 
   function switchTab(next) {
     tab = next;
     document.getElementById("tabDormantBtn").classList.toggle("active", tab === "dormant");
     document.getElementById("tabRecentBtn").classList.toggle("active", tab === "recent");
+    document.getElementById("tabWatchlistBtn").classList.toggle("active", tab === "watchlist");
     document.getElementById("dormantTable").style.display = tab === "dormant" ? "" : "none";
     document.getElementById("recentTable").style.display = tab === "recent" ? "" : "none";
-    renderCurrentTab();
+    document.getElementById("watchlistTable").style.display = tab === "watchlist" ? "" : "none";
+    if (tab === "watchlist") loadWatchlist();
+    else renderCurrentTab();
   }
 
   document.getElementById("tabDormantBtn").addEventListener("click", () => switchTab("dormant"));
   document.getElementById("tabRecentBtn").addEventListener("click", () => switchTab("recent"));
+  document.getElementById("tabWatchlistBtn").addEventListener("click", () => switchTab("watchlist"));
   document.getElementById("search").addEventListener("input", renderCurrentTab);
   document.querySelectorAll("th[data-sort]").forEach((th) => {
     th.addEventListener("click", () => {
@@ -599,8 +768,12 @@
     });
   });
 
+  renderStats();
   loadDormant();
   loadRecent();
   setInterval(loadDormant, 60000);
   setInterval(loadRecent, 20000);
+  setInterval(() => {
+    if (tab === "watchlist") loadWatchlist();
+  }, 15000);
 </script>

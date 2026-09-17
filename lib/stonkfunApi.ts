@@ -55,6 +55,16 @@ export async function fetchPoolsPage(opts: { sort?: "marketCap" | "newest" | "vo
   return (await res.json()) as PlatformPoolsPage;
 }
 
+/** Undefined if this mint has no pool at all (bad/unknown address) — a real, live-confirmed "not found"
+ * case (empty `pools` array), not an error. Confirmed live: /api/platform-pools?mint=<mint> returns the
+ * single matching pool, same shape as the paginated listing. */
+export async function fetchPoolByMint(mint: string): Promise<StonkfunPool | undefined> {
+  const res = await fetch(`${API_BASE}/platform-pools?mint=${encodeURIComponent(mint)}`);
+  if (!res.ok) throw new Error(`platform-pools (by mint) failed: ${res.status}`);
+  const json = (await res.json()) as PlatformPoolsPage;
+  return json.pools[0];
+}
+
 export async function fetchRecentLaunches(): Promise<StonkfunPool[]> {
   const res = await fetch(`${API_BASE}/recent-launches`);
   if (!res.ok) throw new Error(`recent-launches failed: ${res.status}`);

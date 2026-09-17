@@ -1,4 +1,4 @@
-import { fetchPoolsPage, fetchRecentLaunches, fetchRewards, type StonkfunPool } from "./stonkfunApi";
+import { fetchPoolsPage, fetchPoolByMint, fetchRecentLaunches, fetchRewards, type StonkfunPool } from "./stonkfunApi";
 import { getScanCursor, setScanCursor, wasRecentlyChecked, markChecked, upsertDormant, removeDormant, type DormantEntry } from "./store";
 import { mapWithConcurrency } from "./concurrency";
 
@@ -165,4 +165,55 @@ export async function scanDormantBatch(pagesPerRun = 8, maxRewardChecks = 40): P
   }
 
   return { pagesScanned, candidatesChecked, newlyDormant, clearedFromDormant, cursorAdvancedTo: page };
+}
+
+export interface WatchlistPool extends EnrichedPool {
+  notFound?: boolean;
+}
+
+/** Live lookup for a small, user-curated set of mints (the watchlist — starred client-side, persisted in
+ * localStorage, never more than a handful of tokens) — unlike the dormant scan, this fetches fresh on
+ * every request rather than relying on a cached sweep, since the whole point of starring something is to
+ * check on it right now. A mint stonk.fun no longer has a pool for comes back with `notFound: true`
+ * rather than being silently dropped, so the UI can say so instead of the token just vanishing. */
+export async function fetchWatchlist(mints: string[]): Promise<WatchlistPool[]> {
+  return mapWithConcurrency(mints, 8, async (mint): Promise<WatchlistPool> => {
+    const pool = await fetchPoolByMint(mint).catch(() => undefined);
+    if (!pool) {
+      return {
+        mint,
+        pool: "",
+        name: mint,
+        symbol: "?",
+        createdAt: new Date(0).toISOString(),
+        quoteMint: "",
+        quoteSymbol: "",
+        marketCapUsd: 0,
+        fdvUsd: 0,
+        volume24hUsd: 0,
+        graduationProgress: 0,
+        status: "unknown",
+        graduatedAt: null,
+        launchpad: null,
+        isRewardLaunch: false,
+        holderCount: null,
+        pendingTaxUsd: null,
+        lastPayoutAt: null,
+        notFound: true,
+      };
+    }
+    if (!pool.isRewardLaunch) return { ...pool, holderCount: null, pendingTaxUsd: null, lastPayoutAt: null };
+    try {
+      const rewards = await fetchRewards(pool.mint);
+      if (!rewards) return { ...pool, holderCount: null, pendingTaxUsd: null, lastPayoutAt: null };
+      return {
+        ...pool,
+        holderCount: rewards.holderCount ?? null,
+        pendingTaxUsd: rewards.pendingTaxUsd ?? null,
+        lastPayoutAt: rewards.lastPayoutAt ?? null,
+      };
+    } catch {
+      return { ...pool, holderCount: null, pendingTaxUsd: null, lastPayoutAt: null };
+    }
+  });
 }
