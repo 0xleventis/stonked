@@ -424,6 +424,46 @@ export default function Home() {
     return new Set(watchlist.filter((w) => watchMeta[w.mint] && isNewerPayout(watchMeta[w.mint].baselinePayoutAt, w.lastPayoutAt)).map((w) => w.mint));
   }, [watchlist, watchMeta]);
 
+  // Desktop (Windows/Mac/Linux) OS notifications via the browser's Notification API — separate from the
+  // in-page bell badge above. "default" means the browser hasn't been asked yet; asking requires a user
+  // gesture (the button below), it can't happen automatically on load.
+  const [notifPermission, setNotifPermission] = useState<NotificationPermission | "unsupported">("unsupported");
+  useEffect(() => {
+    if (typeof Notification !== "undefined") setNotifPermission(Notification.permission);
+  }, []);
+  function requestNotifPermission() {
+    if (typeof Notification === "undefined") return;
+    Notification.requestPermission().then((p) => setNotifPermission(p));
+  }
+
+  // Fires a real OS notification once per newly-detected alert, not once per poll — `notifiedRef` tracks
+  // which mints have already fired one, and a mint is removed from it as soon as its alert clears (via
+  // acknowledgement) so a *future* new payout on the same mint notifies again.
+  const notifiedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+    for (const mint of watchlistAlerts) {
+      if (notifiedRef.current.has(mint)) continue;
+      notifiedRef.current.add(mint);
+      const entry = (watchlist ?? []).find((w) => w.mint === mint);
+      if (!entry) continue;
+      try {
+        const n = new Notification(`💰 New payout — ${entry.symbol}`, {
+          body: `${entry.symbol} just paid out ${fmtUsd(entry.pendingTaxUsd)} in tracked fees since you starred it.`,
+          icon: "/logo-64.png",
+          tag: `payout-${mint}`,
+        });
+        n.onclick = () => window.focus();
+      } catch {
+        // Some browsers throw if permission was revoked between the check above and construction — the
+        // in-page bell badge still covers the alert either way.
+      }
+    }
+    for (const mint of notifiedRef.current) {
+      if (!watchlistAlerts.has(mint)) notifiedRef.current.delete(mint);
+    }
+  }, [watchlistAlerts, watchlist]);
+
   const rows = tab === "dormant" ? dormant ?? [] : tab === "recent" ? recent ?? [] : watchlist ?? [];
   const filtered = rows.filter(
     (r) => !search.trim() || r.symbol.toLowerCase().includes(search.toLowerCase()) || r.mint.toLowerCase().includes(search.toLowerCase()) || r.name.toLowerCase().includes(search.toLowerCase())
@@ -446,6 +486,21 @@ export default function Home() {
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {notifPermission === "default" && (
+            <button className="theme-toggle" title="Get a Windows/desktop notification when a starred token pays out" onClick={requestNotifPermission}>
+              🔔 Enable payout alerts
+            </button>
+          )}
+          {notifPermission === "granted" && (
+            <span className="live-pill" title="Desktop notifications are on for new watchlist payouts">
+              🔔 Alerts on
+            </span>
+          )}
+          {notifPermission === "denied" && (
+            <span className="live-pill" title="Notifications were blocked — re-enable them in your browser's site settings">
+              🔔 Alerts blocked
+            </span>
+          )}
           <button
             className="theme-toggle"
             title={`Theme: ${theme} (click to change)`}

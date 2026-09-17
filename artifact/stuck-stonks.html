@@ -232,6 +232,7 @@
       </div>
     </div>
     <div style="display: flex; align-items: center; gap: 8px">
+      <button class="theme-toggle" id="notifBtn" style="display: none" title="Get a desktop notification when a starred token pays out"></button>
       <button class="theme-toggle" id="themeToggle" title="Click to change theme"></button>
       <div class="live-pill"><span class="live-dot"></span><span id="lastUpdated">connecting…</span></div>
     </div>
@@ -352,6 +353,66 @@
     });
   }
   initTheme();
+
+  // Desktop OS notifications (Windows/Mac/Linux) via the browser's Notification API. Separate from the
+  // in-page 🔔 badge. Best-effort: Claude artifacts can render inside a sandboxed iframe where the
+  // Notification API or permission prompts may be unavailable — this degrades silently to "unsupported"
+  // rather than throwing, and the in-page badge/tab count still work regardless.
+  function refreshNotifBtn() {
+    const btn = document.getElementById("notifBtn");
+    if (typeof Notification === "undefined") {
+      btn.style.display = "none";
+      return;
+    }
+    if (Notification.permission === "granted") {
+      btn.style.display = "";
+      btn.textContent = "🔔 Alerts on";
+      btn.title = "Desktop notifications are on for new watchlist payouts";
+      btn.onclick = null;
+    } else if (Notification.permission === "denied") {
+      btn.style.display = "";
+      btn.textContent = "🔔 Alerts blocked";
+      btn.title = "Notifications were blocked — re-enable them in your browser's site settings";
+      btn.onclick = null;
+    } else {
+      btn.style.display = "";
+      btn.textContent = "🔔 Enable payout alerts";
+      btn.title = "Get a desktop notification when a starred token pays out";
+      btn.onclick = () => Notification.requestPermission().then(refreshNotifBtn);
+    }
+  }
+  try {
+    refreshNotifBtn();
+  } catch {
+    // Notification API present but permission access blocked by the embedding context — leave the
+    // button hidden (its initial inline style) rather than fail the whole script.
+  }
+
+  // Fires once per newly-detected alert, not once per poll — a mint is dropped from `notifiedMints` as
+  // soon as its alert clears (acknowledged) so a *future* new payout on the same mint notifies again.
+  const notifiedMints = new Set();
+  function fireNotifications() {
+    if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+    const alerts = watchlistAlertMints();
+    for (const mint of alerts) {
+      if (notifiedMints.has(mint)) continue;
+      notifiedMints.add(mint);
+      const entry = (watchlistData || []).find((w) => w.mint === mint);
+      if (!entry) continue;
+      try {
+        const n = new Notification("💰 New payout — " + entry.symbol, {
+          body: entry.symbol + " just paid out " + fmtUsd(entry.pendingTaxUsd) + " in tracked fees since you starred it.",
+          tag: "payout-" + mint,
+        });
+        n.onclick = () => window.focus();
+      } catch {
+        // Same as above — the in-page bell badge still covers the alert either way.
+      }
+    }
+    for (const mint of [...notifiedMints]) {
+      if (!alerts.has(mint)) notifiedMints.delete(mint);
+    }
+  }
 
   const API_BASE = "https://stuck-stonks.vercel.app/api";
   let tab = "dormant";
@@ -538,6 +599,7 @@
   function renderTabAlertDot() {
     const n = watchlistAlertMints().size;
     document.getElementById("tabWatchlistAlert").textContent = n > 0 ? "🔔 " + n : "";
+    fireNotifications();
   }
 
   function renderStats() {
