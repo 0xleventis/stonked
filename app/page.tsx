@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 interface Pool {
   mint: string;
@@ -113,6 +113,24 @@ function StarButton({ watched, onToggle }: { watched: boolean; onToggle: () => v
   );
 }
 
+// Only ever shown on the Watchlist tab, on a row whose lastPayoutAt has moved past the baseline recorded
+// when the user starred it — i.e. a payout that landed *after* they started watching, not just "this token
+// has ever paid out". Click acknowledges it (moves the baseline up), clearing the alert.
+function PayoutAlertBadge({ payoutAt, onAcknowledge }: { payoutAt: string | null; onAcknowledge: () => void }) {
+  return (
+    <button
+      className="payout-alert"
+      title={`New payout ${ageStr(payoutAt as string)} ago — click to dismiss`}
+      onClick={(e) => {
+        e.stopPropagation();
+        onAcknowledge();
+      }}
+    >
+      🔔 New payout
+    </button>
+  );
+}
+
 function PendingCell({ value, max }: { value: number | null | undefined; max: number }) {
   if (value == null) return <span className="faint">—</span>;
   const pct = Math.max(4, Math.round((value / max) * 100));
@@ -173,38 +191,92 @@ const COLUMNS: { key: SortKey; label: string }[] = [
 
 const WATCHLIST_KEY = "stonked-watchlist";
 
+// Per mint: when it was starred, and the lastPayoutAt value that was true AT THAT MOMENT (or whenever the
+// user last acknowledged an alert for it). Any lastPayoutAt strictly newer than baselinePayoutAt means a
+// payout landed *since* the user started watching — exactly the "only alert on new activity" behavior
+// requested, as opposed to flagging every reward-launch token that has ever paid out.
+interface WatchMeta {
+  addedAt: number;
+  baselinePayoutAt: string | null;
+}
+
 // Client-side-only (localStorage), per-viewer — a starred list is always small and personal, so there's no
-// server-side storage to design around. The Set is hydrated async on mount; `hydrated` lets callers avoid
-// firing the initial watchlist fetch with an empty set before localStorage has actually been read.
+// server-side storage to design around. Hydrated async on mount; `hydrated` lets callers avoid firing the
+// initial watchlist fetch before localStorage has actually been read.
 function useWatchlist() {
-  const [watched, setWatched] = useState<Set<string>>(new Set());
+  const [meta, setMeta] = useState<Record<string, WatchMeta>>({});
   const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
     try {
       const saved = localStorage.getItem(WATCHLIST_KEY);
-      if (saved) setWatched(new Set(JSON.parse(saved) as string[]));
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        // Migrate the original format (a plain array of mints, no payout tracking) transparently —
+        // existing starred tokens keep working, they just start with no baseline (an unknown null),
+        // so their very next reported payout will read as "new" once.
+        if (Array.isArray(parsed)) {
+          const migrated: Record<string, WatchMeta> = {};
+          for (const mint of parsed as string[]) migrated[mint] = { addedAt: Date.now(), baselinePayoutAt: null };
+          setMeta(migrated);
+        } else {
+          setMeta(parsed as Record<string, WatchMeta>);
+        }
+      }
     } catch {
       // Private browsing / blocked storage / corrupt value — falls back to an empty watchlist, no crash.
     }
     setHydrated(true);
   }, []);
 
-  function toggle(mint: string) {
-    setWatched((prev) => {
-      const next = new Set(prev);
-      if (next.has(mint)) next.delete(mint);
-      else next.add(mint);
+  function persist(next: Record<string, WatchMeta>) {
+    setMeta(next);
+    try {
+      localStorage.setItem(WATCHLIST_KEY, JSON.stringify(next));
+    } catch {
+      // Same as above — persistence is a nice-to-have, not required for the toggle to work this session.
+    }
+  }
+
+  function toggle(mint: string, currentLastPayoutAt: string | null = null) {
+    setMeta((prev) => {
+      const next = { ...prev };
+      if (next[mint]) delete next[mint];
+      else next[mint] = { addedAt: Date.now(), baselinePayoutAt: currentLastPayoutAt };
       try {
-        localStorage.setItem(WATCHLIST_KEY, JSON.stringify([...next]));
+        localStorage.setItem(WATCHLIST_KEY, JSON.stringify(next));
       } catch {
-        // Same as above — persistence is a nice-to-have, not required for the toggle to work this session.
+        // Same as above.
       }
       return next;
     });
   }
 
-  return { watched, toggle, hydrated };
+  // Clears a mint's "new payout" alert by moving its baseline up to the payout it just alerted on.
+  function acknowledge(mint: string, payoutAt: string | null) {
+    setMeta((prev) => {
+      if (!prev[mint]) return prev;
+      const next = { ...prev, [mint]: { ...prev[mint], baselinePayoutAt: payoutAt } };
+      try {
+        localStorage.setItem(WATCHLIST_KEY, JSON.stringify(next));
+      } catch {
+        // Same as above.
+      }
+      return next;
+    });
+  }
+
+  const watched = useMemo(() => new Set(Object.keys(meta)), [meta]);
+
+  return { watched, meta, toggle, acknowledge, hydrated };
+}
+
+/** True if `b` represents a strictly later payout than `a` — a null `a` (never paid out, or unknown
+ * baseline) counts as "always before" so the very first observed payout still reads as new. */
+function isNewerPayout(a: string | null, b: string | null): boolean {
+  if (!b) return false;
+  if (!a) return true;
+  return new Date(b).getTime() > new Date(a).getTime();
 }
 
 type Theme = "system" | "light" | "dark";
@@ -238,7 +310,7 @@ function useTheme() {
 
 export default function Home() {
   const [theme, setTheme] = useTheme();
-  const { watched, toggle: toggleWatch, hydrated: watchlistHydrated } = useWatchlist();
+  const { watched, meta: watchMeta, toggle: toggleWatch, acknowledge: acknowledgePayout, hydrated: watchlistHydrated } = useWatchlist();
   const [tab, setTab] = useState<Tab>("dormant");
   const [dormant, setDormant] = useState<DormantEntry[] | null>(null);
   const [recent, setRecent] = useState<Pool[] | null>(null);
@@ -251,9 +323,9 @@ export default function Home() {
   const [lastUpdated, setLastUpdated] = useState<string>("connecting…");
 
   useEffect(() => {
+    setError(null);
     if (tab === "watchlist") return;
     let cancelled = false;
-    setError(null);
     const load = () => {
       if (tab === "dormant") {
         fetch("/api/dormant")
@@ -289,30 +361,39 @@ export default function Home() {
     };
   }, [tab]);
 
-  // Separate from the effect above since it depends on `watched` (re-fetches live whenever a star is
-  // toggled while this tab is open) — folding it into the same effect would also re-fetch dormant/recent
-  // on every star toggle, which is pointless work.
+  // Tracked in a ref (not just the `tab` state) so the interval below — created once per `watched` change,
+  // not per tab switch — always checks which tab is *currently* showing rather than whichever tab was
+  // active when the effect last re-ran.
+  const tabRef = useRef(tab);
   useEffect(() => {
-    if (tab !== "watchlist" || !watchlistHydrated) return;
+    tabRef.current = tab;
+  }, [tab]);
+
+  // Separate from the effect above since it depends on `watched` (re-fetches live whenever a star is
+  // toggled) — folding it into the same effect would also re-fetch dormant/recent on every star toggle,
+  // which is pointless work. Runs regardless of which tab is active (not gated on tab === "watchlist") so
+  // the "🔔 new payout" count on the tab button itself stays live even while looking at Dormant/Recent —
+  // that's the whole point of an alert: you shouldn't have to already be on the tab to see it.
+  useEffect(() => {
+    if (!watchlistHydrated) return;
     let cancelled = false;
-    setError(null);
     const load = () => {
       if (watched.size === 0) {
         setWatchlist([]);
-        setLastUpdated(new Date().toLocaleTimeString());
         return;
       }
       fetch(`/api/watchlist?mints=${[...watched].join(",")}`)
         .then((res) => res.json())
         .then((data: { pools?: WatchlistEntry[]; error?: string }) => {
           if (cancelled) return;
-          if (data.error) setError(data.error);
-          else {
+          if (data.error) {
+            if (tabRef.current === "watchlist") setError(data.error);
+          } else {
             setWatchlist(data.pools ?? []);
-            setLastUpdated(new Date().toLocaleTimeString());
+            if (tabRef.current === "watchlist") setLastUpdated(new Date().toLocaleTimeString());
           }
         })
-        .catch((e) => !cancelled && setError(String(e)));
+        .catch((e) => !cancelled && tabRef.current === "watchlist" && setError(String(e)));
     };
     load();
     const interval = setInterval(load, 15_000);
@@ -320,7 +401,7 @@ export default function Home() {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [tab, watched, watchlistHydrated]);
+  }, [watched, watchlistHydrated]);
 
   function toggleSort(key: SortKey) {
     if (key === sortKey) setSortDir((d) => (d === 1 ? -1 : 1) as 1 | -1);
@@ -335,6 +416,13 @@ export default function Home() {
     if (!dormant || dormant.length === 0) return null;
     return dormant.reduce((a, b) => (ageMs(a.createdAt) > ageMs(b.createdAt) ? a : b));
   }, [dormant]);
+
+  // Mints whose live lastPayoutAt has moved past the baseline recorded when starred (or last
+  // acknowledged) — a payout that landed since the user started watching, not merely "has ever paid out".
+  const watchlistAlerts = useMemo(() => {
+    if (!watchlist) return new Set<string>();
+    return new Set(watchlist.filter((w) => watchMeta[w.mint] && isNewerPayout(watchMeta[w.mint].baselinePayoutAt, w.lastPayoutAt)).map((w) => w.mint));
+  }, [watchlist, watchMeta]);
 
   const rows = tab === "dormant" ? dormant ?? [] : tab === "recent" ? recent ?? [] : watchlist ?? [];
   const filtered = rows.filter(
@@ -404,6 +492,7 @@ export default function Home() {
         </button>
         <button className={`tab ${tab === "watchlist" ? "active" : ""}`} onClick={() => setTab("watchlist")}>
           ★ Watchlist <span className="count">{`(${watched.size})`}</span>
+          {watchlistAlerts.size > 0 && <span className="tab-alert-dot">🔔 {watchlistAlerts.size}</span>}
         </button>
       </div>
 
@@ -449,17 +538,21 @@ export default function Home() {
               )}
               {sorted.map((r) => {
                 const notFound = tab === "watchlist" && "notFound" in r && (r as WatchlistEntry).notFound;
+                const hasAlert = tab === "watchlist" && !notFound && watchlistAlerts.has(r.mint);
                 return (
                   <>
-                    <tr className="row" key={r.mint} onClick={() => !notFound && setExpanded(expanded === r.mint ? null : r.mint)}>
+                    <tr className={`row ${hasAlert ? "row-alert" : ""}`} key={r.mint} onClick={() => !notFound && setExpanded(expanded === r.mint ? null : r.mint)}>
                       <td onClick={(e) => e.stopPropagation()}>
-                        <StarButton watched={watched.has(r.mint)} onToggle={() => toggleWatch(r.mint)} />
+                        <StarButton watched={watched.has(r.mint)} onToggle={() => toggleWatch(r.mint, r.lastPayoutAt)} />
                       </td>
                       <td>
                         <div className="token-cell">
                           <Logo imageUrl={r.imageUrl} symbol={r.symbol} />
                           <div>
-                            <div className="token-name">{notFound ? shortMint(r.mint) : r.symbol}</div>
+                            <div className="token-name">
+                              {notFound ? shortMint(r.mint) : r.symbol}
+                              {hasAlert && <PayoutAlertBadge payoutAt={r.lastPayoutAt} onAcknowledge={() => acknowledgePayout(r.mint, r.lastPayoutAt)} />}
+                            </div>
                             <a className="token-mint" href={`https://www.stonkfun.xyz/token/${r.mint}`} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
                               {shortMint(r.mint)}
                             </a>

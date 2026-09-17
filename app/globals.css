@@ -114,6 +114,18 @@ html, body {
 .star-btn:hover { color: var(--warn); }
 .star-btn.on { color: var(--warn); }
 
+.tab-alert-dot {
+  display: inline-flex; align-items: center; margin-left: 6px; font-size: 11px; font-weight: 700;
+  color: var(--danger); background: var(--fresh-soft); border-radius: 20px; padding: 2px 7px;
+}
+.row.row-alert { background: color-mix(in srgb, var(--danger) 8%, transparent); }
+.payout-alert {
+  display: inline-flex; align-items: center; gap: 3px; margin-left: 8px; font-size: 10.5px; font-weight: 700;
+  color: #fff; background: var(--danger); border: none; border-radius: 20px; padding: 2px 8px; cursor: pointer;
+  font-family: inherit; vertical-align: middle;
+}
+.payout-alert:hover { opacity: 0.85; }
+
 .toolbar { display: flex; gap: 10px; margin-bottom: 12px; align-items: center; flex-wrap: wrap; }
 .search {
   flex: 1; min-width: 180px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px;

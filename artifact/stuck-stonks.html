@@ -121,6 +121,18 @@
   .star-btn:hover { color: var(--warn); }
   .star-btn.on { color: var(--warn); }
 
+  .tab-alert-dot {
+    display: inline-flex; align-items: center; margin-left: 6px; font-size: 11px; font-weight: 700;
+    color: var(--danger); background: var(--fresh-soft); border-radius: 20px; padding: 2px 7px;
+  }
+  .row.row-alert { background: color-mix(in srgb, var(--danger) 8%, transparent); }
+  .payout-alert {
+    display: inline-flex; align-items: center; gap: 3px; margin-left: 8px; font-size: 10.5px; font-weight: 700;
+    color: #fff; background: var(--danger); border: none; border-radius: 20px; padding: 2px 8px; cursor: pointer;
+    font-family: inherit; vertical-align: middle;
+  }
+  .payout-alert:hover { opacity: 0.85; }
+
   .toolbar { display: flex; gap: 10px; margin-bottom: 12px; align-items: center; flex-wrap: wrap; }
   .search {
     flex: 1; min-width: 180px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
@@ -251,7 +263,7 @@
   <div class="tabs">
     <button class="tab active" data-tab="dormant" id="tabDormantBtn">Dormant fees <span class="count" id="tabDormantCount"></span></button>
     <button class="tab" data-tab="recent" id="tabRecentBtn">Recent launches <span class="count" id="tabRecentCount"></span></button>
-    <button class="tab" data-tab="watchlist" id="tabWatchlistBtn">★ Watchlist <span class="count" id="tabWatchlistCount"></span></button>
+    <button class="tab" data-tab="watchlist" id="tabWatchlistBtn">★ Watchlist <span class="count" id="tabWatchlistCount"></span><span class="tab-alert-dot" id="tabWatchlistAlert"></span></button>
   </div>
 
   <div class="toolbar">
@@ -352,42 +364,86 @@
   let holderCache = {};
 
   // Client-side-only (localStorage), per-viewer — a starred list is always small and personal, so there's
-  // no server-side storage to design around.
+  // no server-side storage to design around. watchMeta[mint] = { addedAt, baselinePayoutAt } — the payout
+  // value that was true AT THE MOMENT it was starred (or last acknowledged); any lastPayoutAt strictly
+  // newer than that means a payout landed *since* the user started watching, which is what the 🔔 alert
+  // tracks (not merely "this token has ever paid out").
   const WATCHLIST_KEY = "stonked-watchlist";
-  let watched = new Set();
+  let watchMeta = {};
   try {
     const saved = localStorage.getItem(WATCHLIST_KEY);
-    if (saved) watched = new Set(JSON.parse(saved));
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      // Migrate the original format (a plain array of mints, no payout tracking) transparently.
+      if (Array.isArray(parsed)) {
+        parsed.forEach((mint) => (watchMeta[mint] = { addedAt: Date.now(), baselinePayoutAt: null }));
+      } else {
+        watchMeta = parsed;
+      }
+    }
   } catch {
     // Private browsing / blocked storage / corrupt value — falls back to an empty watchlist, no crash.
   }
-  function saveWatched() {
+  function saveWatchMeta() {
     try {
-      localStorage.setItem(WATCHLIST_KEY, JSON.stringify([...watched]));
+      localStorage.setItem(WATCHLIST_KEY, JSON.stringify(watchMeta));
     } catch {
       // Same as above — persistence is a nice-to-have, not required for the toggle to work this session.
     }
   }
-  function toggleWatch(mint) {
-    if (watched.has(mint)) watched.delete(mint);
-    else watched.add(mint);
-    saveWatched();
+  function toggleWatch(mint, currentLastPayoutAt) {
+    if (watchMeta[mint]) delete watchMeta[mint];
+    else watchMeta[mint] = { addedAt: Date.now(), baselinePayoutAt: currentLastPayoutAt || null };
+    saveWatchMeta();
     if (tab === "watchlist") loadWatchlist();
     else renderCurrentTab();
     renderStats();
   }
-  function starCellHtml(mint) {
-    const on = watched.has(mint);
+  function acknowledgePayout(mint, payoutAt) {
+    if (!watchMeta[mint]) return;
+    watchMeta[mint] = { ...watchMeta[mint], baselinePayoutAt: payoutAt };
+    saveWatchMeta();
+    renderCurrentTab();
+  }
+  // A null `a` (never paid out, or unknown baseline) counts as "always before" so the very first observed
+  // payout still reads as new.
+  function isNewerPayout(a, b) {
+    if (!b) return false;
+    if (!a) return true;
+    return new Date(b).getTime() > new Date(a).getTime();
+  }
+  // A single-quoted JS string literal safe to embed inside a DOUBLE-quoted HTML onclick="..." attribute —
+  // JSON.stringify would emit double quotes that prematurely close that attribute (a real bug hit while
+  // embedding ISO payout timestamps: unlike `null`, an actual date string broke the markup).
+  function jsStrLiteral(value) {
+    if (value === null || value === undefined) return "null";
+    return "'" + String(value).replace(/\\/g, "\\\\").replace(/'/g, "\\'") + "'";
+  }
+  function starCellHtml(mint, lastPayoutAt) {
+    const on = mint in watchMeta;
     return (
       '<td onclick="event.stopPropagation()"><button class="star-btn' +
       (on ? " on" : "") +
       '" onclick="toggleWatch(\'' +
       mint +
-      "')\" title=\"" +
+      "', " +
+      jsStrLiteral(lastPayoutAt) +
+      ')" title="' +
       (on ? "Remove from watchlist" : "Add to watchlist") +
       '">' +
       (on ? "★" : "☆") +
       "</button></td>"
+    );
+  }
+  function payoutAlertHtml(mint, payoutAt) {
+    return (
+      '<button class="payout-alert" onclick="event.stopPropagation();acknowledgePayout(\'' +
+      mint +
+      "', " +
+      jsStrLiteral(payoutAt) +
+      ')" title="New payout ' +
+      escapeHtml(ageStr(payoutAt)) +
+      ' ago — click to dismiss">🔔 New payout</button>'
     );
   }
 
@@ -453,21 +509,35 @@
   // starring something is to check on it right now. Never more than 50 mints (client-enforced watchlist
   // size), so no pagination needed.
   async function loadWatchlist() {
-    if (watched.size === 0) {
+    const mints = Object.keys(watchMeta);
+    if (mints.length === 0) {
       watchlistData = [];
       renderStats();
       renderWatchlist();
       return;
     }
     try {
-      const data = await fetchJson("/watchlist?mints=" + [...watched].join(","));
+      const data = await fetchJson("/watchlist?mints=" + mints.join(","));
       watchlistData = data.pools || [];
       renderStats();
       renderWatchlist();
+      if (tab !== "watchlist") renderTabAlertDot();
     } catch (e) {
       document.getElementById("watchlistBody").innerHTML =
         '<tr><td colspan="7" class="state-msg error">Couldn\'t load watchlist: ' + escapeHtml(e.message) + "</td></tr>";
     }
+  }
+
+  // Mints whose live lastPayoutAt has moved past the baseline recorded when starred (or last
+  // acknowledged) — kept live regardless of which tab is showing, so the tab button's 🔔 count stays
+  // accurate even while looking at Dormant/Recent (that's the whole point of an alert).
+  function watchlistAlertMints() {
+    if (!watchlistData) return new Set();
+    return new Set(watchlistData.filter((w) => watchMeta[w.mint] && isNewerPayout(watchMeta[w.mint].baselinePayoutAt, w.lastPayoutAt)).map((w) => w.mint));
+  }
+  function renderTabAlertDot() {
+    const n = watchlistAlertMints().size;
+    document.getElementById("tabWatchlistAlert").textContent = n > 0 ? "🔔 " + n : "";
   }
 
   function renderStats() {
@@ -477,7 +547,8 @@
     document.getElementById("statRecentCount").textContent = recentData.length.toLocaleString();
     document.getElementById("tabDormantCount").textContent = dormantData.length ? "(" + dormantData.length + ")" : "";
     document.getElementById("tabRecentCount").textContent = recentData.length ? "(" + recentData.length + ")" : "";
-    document.getElementById("tabWatchlistCount").textContent = "(" + watched.size + ")";
+    document.getElementById("tabWatchlistCount").textContent = "(" + Object.keys(watchMeta).length + ")";
+    renderTabAlertDot();
     if (dormantData.length) {
       const oldest = dormantData.reduce((a, b) => (ageMs(a.createdAt) > ageMs(b.createdAt) ? a : b));
       document.getElementById("statOldest").textContent = ageStr(oldest.createdAt);
@@ -567,7 +638,7 @@
           '<tr class="row" onclick="toggleExpand(\'' +
           d.mint +
           "')\">" +
-          starCellHtml(d.mint) +
+          starCellHtml(d.mint, d.lastPayoutAt) +
           '<td><div class="token-cell">' +
           logo +
           '<div><div class="token-name">' +
@@ -631,7 +702,7 @@
           '<tr class="row" onclick="toggleExpand(\'' +
           p.mint +
           "')\">" +
-          starCellHtml(p.mint) +
+          starCellHtml(p.mint, p.lastPayoutAt) +
           '<td><div class="token-cell">' +
           logo +
           '<div><div class="token-name">' +
@@ -663,7 +734,7 @@
 
   function renderWatchlist() {
     const body = document.getElementById("watchlistBody");
-    if (watched.size === 0) {
+    if (Object.keys(watchMeta).length === 0) {
       body.innerHTML = '<tr><td colspan="7" class="state-msg">Nothing starred yet — click the ☆ next to any token to add it here.</td></tr>';
       return;
     }
@@ -676,6 +747,7 @@
       body.innerHTML = '<tr><td colspan="7" class="state-msg">No starred tokens matched.</td></tr>';
       return;
     }
+    const alertMints = watchlistAlertMints();
     const maxPending = Math.max(...watchlistData.map((p) => p.pendingTaxUsd || 0), 1);
     body.innerHTML = rows
       .map((p) => {
@@ -694,19 +766,23 @@
             '<td colspan="5" class="state-msg">No longer found on stonk.fun — the pool may have been removed.</td></tr>'
           );
         }
+        const hasAlert = alertMints.has(p.mint);
         const pct = Math.max(4, Math.round(((p.pendingTaxUsd || 0) / maxPending) * 100));
         const logo = p.imageUrl
           ? '<img class="logo" src="' + escapeHtml(p.imageUrl) + '" onerror="this.outerHTML=\'<div class=logo-fallback>' + tokenInitial(p.symbol) + "</div>'\" />"
           : '<div class="logo-fallback">' + tokenInitial(p.symbol) + "</div>";
         const rowHtml =
-          '<tr class="row" onclick="toggleExpand(\'' +
+          '<tr class="row' +
+          (hasAlert ? " row-alert" : "") +
+          '" onclick="toggleExpand(\'' +
           p.mint +
           "')\">" +
-          starCellHtml(p.mint) +
+          starCellHtml(p.mint, p.lastPayoutAt) +
           '<td><div class="token-cell">' +
           logo +
           '<div><div class="token-name">' +
           escapeHtml(p.symbol) +
+          (hasAlert ? payoutAlertHtml(p.mint, p.lastPayoutAt) : "") +
           '</div><a class="token-mint" href="https://www.stonkfun.xyz/token/' +
           p.mint +
           '" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">' +
@@ -771,9 +847,10 @@
   renderStats();
   loadDormant();
   loadRecent();
+  // Runs regardless of which tab is active — not gated on tab === "watchlist" — so the tab button's 🔔
+  // count stays live even while looking at Dormant/Recent; that's the point of an alert.
+  loadWatchlist();
   setInterval(loadDormant, 60000);
   setInterval(loadRecent, 20000);
-  setInterval(() => {
-    if (tab === "watchlist") loadWatchlist();
-  }, 15000);
+  setInterval(loadWatchlist, 15000);
 </script>
