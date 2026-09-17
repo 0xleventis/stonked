@@ -129,7 +129,7 @@ export default function Home() {
 
   return (
     <div className="wrap">
-      <div className="title">$ stuck-stonks</div>
+      <div className="title">$ stonk-hounds</div>
       <div className="subtitle">
         Tokens on stonk.fun that are either brand new (&lt;4h old) or dormant with fee revenue piling up unclaimed. Not limited to Bruno launches.
       </div>

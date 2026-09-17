@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Stuck Stonks",
+  title: "Stonk Hounds",
   description: "Recent and dormant-with-pending-fees tokens on stonk.fun",
 };
 
