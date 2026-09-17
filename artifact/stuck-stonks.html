@@ -1,0 +1,546 @@
+<title>Stuck Stonks</title>
+<style>
+  :root {
+    --bg: #f7f8fa;
+    --surface: #ffffff;
+    --surface-2: #f1f3f6;
+    --border: #e4e7ec;
+    --text: #0f172a;
+    --text-dim: #64748b;
+    --text-faint: #94a3b8;
+    --accent: #0d9488;
+    --accent-soft: #ccfbf1;
+    --accent-strong: #0f766e;
+    --warn: #b45309;
+    --warn-soft: #fef3c7;
+    --danger: #dc2626;
+    --fresh: #2563eb;
+    --fresh-soft: #dbeafe;
+    --shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 8px 24px -8px rgba(15, 23, 42, 0.08);
+    --radius: 14px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0b0f14;
+      --surface: #10161d;
+      --surface-2: #151d26;
+      --border: #223040;
+      --text: #eaf1f7;
+      --text-dim: #93a5b8;
+      --text-faint: #5c7086;
+      --accent: #2dd4bf;
+      --accent-soft: #0d3230;
+      --accent-strong: #5eead4;
+      --warn: #fbbf24;
+      --warn-soft: #3a2c0d;
+      --danger: #f87171;
+      --fresh: #60a5fa;
+      --fresh-soft: #10223d;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 30px -10px rgba(0, 0, 0, 0.5);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0b0f14;
+    --surface: #10161d;
+    --surface-2: #151d26;
+    --border: #223040;
+    --text: #eaf1f7;
+    --text-dim: #93a5b8;
+    --text-faint: #5c7086;
+    --accent: #2dd4bf;
+    --accent-soft: #0d3230;
+    --accent-strong: #5eead4;
+    --warn: #fbbf24;
+    --warn-soft: #3a2c0d;
+    --danger: #f87171;
+    --fresh: #60a5fa;
+    --fresh-soft: #10223d;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 30px -10px rgba(0, 0, 0, 0.5);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .page { max-width: 1180px; margin: 0 auto; padding: 28px 20px 80px; }
+
+  .topbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 22px; }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand-mark {
+    width: 34px; height: 34px; border-radius: 9px; background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+    display: flex; align-items: center; justify-content: center; font-size: 16px; box-shadow: var(--shadow);
+  }
+  .brand-name { font-size: 18px; font-weight: 700; letter-spacing: -0.01em; }
+  .brand-sub { font-size: 12.5px; color: var(--text-dim); margin-top: 1px; max-width: 520px; line-height: 1.4; }
+  .live-pill {
+    display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-dim);
+    background: var(--surface); border: 1px solid var(--border); border-radius: 20px; padding: 6px 12px; white-space: nowrap;
+  }
+  .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 0 rgba(45,212,191,0.6); animation: pulse 2s infinite; }
+  @keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(45,212,191,0.5); }
+    70% { box-shadow: 0 0 0 6px rgba(45,212,191,0); }
+    100% { box-shadow: 0 0 0 0 rgba(45,212,191,0); }
+  }
+
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 22px; }
+  @media (max-width: 760px) { .stats { grid-template-columns: repeat(2, 1fr); } }
+  .stat {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 18px;
+    box-shadow: var(--shadow);
+  }
+  .stat-label { font-size: 11.5px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.04em; }
+  .stat-value { font-size: 24px; font-weight: 700; margin-top: 6px; letter-spacing: -0.01em; }
+  .stat-value.accent { color: var(--accent-strong); }
+  .stat-note { font-size: 11.5px; color: var(--text-faint); margin-top: 4px; }
+
+  .tabs { display: flex; gap: 6px; margin-bottom: 14px; }
+  .tab {
+    background: var(--surface); border: 1px solid var(--border); color: var(--text-dim); font-size: 13px; font-weight: 600;
+    padding: 9px 16px; border-radius: 10px; cursor: pointer; font-family: inherit; transition: all 0.15s;
+  }
+  .tab.active { background: var(--accent); color: #04241f; border-color: var(--accent); }
+  :root[data-theme="dark"] .tab.active, @media (prefers-color-scheme: dark) { }
+  .tab .count { opacity: 0.75; font-weight: 500; }
+
+  .toolbar { display: flex; gap: 10px; margin-bottom: 12px; align-items: center; flex-wrap: wrap; }
+  .search {
+    flex: 1; min-width: 180px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 9px 12px; color: var(--text); font-size: 13px; font-family: inherit;
+  }
+  .search:focus { outline: none; border-color: var(--accent); }
+  .refresh-note { font-size: 11.5px; color: var(--text-faint); white-space: nowrap; }
+
+  .panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  thead th {
+    text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-faint);
+    font-weight: 600; padding: 12px 14px; border-bottom: 1px solid var(--border); background: var(--surface-2);
+    cursor: pointer; user-select: none; white-space: nowrap;
+  }
+  thead th:hover { color: var(--text-dim); }
+  tbody td { padding: 12px 14px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  tbody tr.row { cursor: pointer; transition: background 0.1s; }
+  tbody tr.row:hover { background: var(--surface-2); }
+  tbody tr:last-child td { border-bottom: none; }
+
+  .token-cell { display: flex; align-items: center; gap: 10px; }
+  .logo {
+    width: 28px; height: 28px; border-radius: 8px; background: var(--surface-2); object-fit: cover; flex-shrink: 0;
+    border: 1px solid var(--border);
+  }
+  .logo-fallback {
+    width: 28px; height: 28px; border-radius: 8px; background: linear-gradient(135deg, var(--accent-soft), var(--surface-2));
+    display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; color: var(--accent-strong);
+    flex-shrink: 0; border: 1px solid var(--border);
+  }
+  .token-name { font-weight: 600; font-size: 13px; }
+  .token-mint {
+    font-size: 11px; color: var(--text-faint); text-decoration: none; font-family: "SF Mono", ui-monospace, Menlo, monospace;
+  }
+  .token-mint:hover { color: var(--accent-strong); }
+
+  .pending-wrap { display: flex; flex-direction: column; gap: 4px; min-width: 110px; }
+  .pending-amt { font-weight: 700; font-size: 13.5px; color: var(--warn); }
+  .pending-bar-track { height: 4px; background: var(--surface-2); border-radius: 3px; overflow: hidden; }
+  .pending-bar-fill { height: 100%; background: linear-gradient(90deg, var(--warn), var(--danger)); border-radius: 3px; }
+
+  .badge {
+    display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 600; padding: 3px 9px;
+    border-radius: 20px;
+  }
+  .badge.fresh { background: var(--fresh-soft); color: var(--fresh); }
+  .badge.yes { background: var(--accent-soft); color: var(--accent-strong); }
+  .badge.no { background: var(--surface-2); color: var(--text-faint); }
+
+  .age-dim { color: var(--text-dim); }
+
+  .holders-row td { background: var(--surface-2); padding: 0; }
+  .holders-wrap { padding: 14px 20px; }
+  .holders-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-faint); margin-bottom: 8px; font-weight: 600; }
+  .holder-line {
+    display: flex; justify-content: space-between; gap: 12px; padding: 5px 0; font-size: 12.5px;
+    border-bottom: 1px dashed var(--border);
+  }
+  .holder-line:last-child { border-bottom: none; }
+  .holder-addr { font-family: "SF Mono", ui-monospace, Menlo, monospace; color: var(--text-dim); }
+  .holder-amt { font-weight: 600; color: var(--text); }
+
+  .state-msg { padding: 40px 20px; text-align: center; color: var(--text-faint); font-size: 13px; }
+  .state-msg.error { color: var(--danger); }
+
+  .skeleton-row td { padding: 14px; }
+  .skeleton {
+    height: 14px; border-radius: 6px; background: linear-gradient(90deg, var(--surface-2) 25%, var(--border) 37%, var(--surface-2) 63%);
+    background-size: 400% 100%; animation: shimmer 1.4s ease infinite;
+  }
+  @keyframes shimmer { 0% { background-position: 100% 50%; } 100% { background-position: 0 50%; } }
+
+  .footer-note { margin-top: 18px; font-size: 11.5px; color: var(--text-faint); text-align: center; }
+  .footer-note a { color: var(--accent-strong); text-decoration: none; }
+
+  @media (max-width: 700px) {
+    .panel { overflow-x: auto; }
+    table { min-width: 640px; }
+  }
+</style>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+
+<div class="page">
+  <div class="topbar">
+    <div class="brand">
+      <div class="brand-mark">🪙</div>
+      <div>
+        <div class="brand-name">Stuck Stonks</div>
+        <div class="brand-sub">
+          Live surveillance of stonk.fun's full token history — dormant tokens with real, unclaimed fee revenue piling up,
+          and everything launched in the last 4 hours. Not limited to any one launchpad's own tokens.
+        </div>
+      </div>
+    </div>
+    <div class="live-pill"><span class="live-dot"></span><span id="lastUpdated">connecting…</span></div>
+  </div>
+
+  <div class="stats" id="stats">
+    <div class="stat">
+      <div class="stat-label">Unclaimed fees tracked</div>
+      <div class="stat-value accent" id="statPending">—</div>
+      <div class="stat-note">Across dormant reward-launch tokens</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Dormant tokens found</div>
+      <div class="stat-value" id="statDormantCount">—</div>
+      <div class="stat-note">Scanned so far, updates continuously</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Launched, last 4h</div>
+      <div class="stat-value" id="statRecentCount">—</div>
+      <div class="stat-note">Across every stonk.fun launch</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Oldest stuck token</div>
+      <div class="stat-value" id="statOldest">—</div>
+      <div class="stat-note">Since last fee sweep</div>
+    </div>
+  </div>
+
+  <div class="tabs">
+    <button class="tab active" data-tab="dormant" id="tabDormantBtn">Dormant fees <span class="count" id="tabDormantCount"></span></button>
+    <button class="tab" data-tab="recent" id="tabRecentBtn">Recent launches <span class="count" id="tabRecentCount"></span></button>
+  </div>
+
+  <div class="toolbar">
+    <input class="search" id="search" placeholder="Search by symbol or mint…" />
+    <span class="refresh-note" id="refreshNote">auto-refreshing</span>
+  </div>
+
+  <div class="panel">
+    <table id="dormantTable">
+      <thead>
+        <tr>
+          <th data-sort="symbol">Token</th>
+          <th data-sort="age">Age</th>
+          <th data-sort="holderCount">Holders</th>
+          <th data-sort="pendingTaxUsd">Pending tax ▾</th>
+          <th data-sort="lastPayoutAt">Last payout</th>
+          <th data-sort="volume24hUsd">24h vol</th>
+        </tr>
+      </thead>
+      <tbody id="dormantBody"></tbody>
+    </table>
+    <table id="recentTable" style="display: none">
+      <thead>
+        <tr>
+          <th data-sort="symbol">Token</th>
+          <th data-sort="age">Age</th>
+          <th data-sort="quoteSymbol">Quote</th>
+          <th data-sort="volume24hUsd">24h vol</th>
+          <th data-sort="isRewardLaunch">Reward launch</th>
+        </tr>
+      </thead>
+      <tbody id="recentBody"></tbody>
+    </table>
+  </div>
+
+  <div class="footer-note">
+    Data from stonk.fun's own public API + Solana RPC. Not affiliated with stonk.fun. Source: <a href="https://stuck-stonks.vercel.app" target="_blank" rel="noopener noreferrer">stuck-stonks.vercel.app</a>
+  </div>
+</div>
+
+<script>
+  const API_BASE = "https://stuck-stonks.vercel.app/api";
+  let tab = "dormant";
+  let dormantData = [];
+  let recentData = [];
+  let sortKey = "pendingTaxUsd";
+  let sortDir = -1;
+  let expandedMint = null;
+  let holderCache = {};
+
+  function fmtUsd(n) {
+    if (n === null || n === undefined) return "—";
+    return n.toLocaleString(undefined, { style: "currency", currency: "USD", maximumFractionDigits: n < 10 ? 4 : 2 });
+  }
+  function ageMs(iso) {
+    return Date.now() - new Date(iso).getTime();
+  }
+  function ageStr(iso) {
+    const ms = ageMs(iso);
+    const mins = ms / 60000;
+    if (mins < 60) return Math.round(mins) + "m";
+    const hours = mins / 60;
+    if (hours < 48) return hours.toFixed(1) + "h";
+    return Math.round(hours / 24) + "d";
+  }
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+  function tokenInitial(sym) {
+    return (sym || "?").charAt(0).toUpperCase();
+  }
+  function shortMint(m) {
+    return m.slice(0, 4) + "…" + m.slice(-4);
+  }
+  function setLive(msg) {
+    document.getElementById("lastUpdated").textContent = msg;
+  }
+
+  async function fetchJson(path) {
+    const res = await fetch(API_BASE + path);
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    return res.json();
+  }
+
+  async function loadDormant() {
+    try {
+      const data = await fetchJson("/dormant");
+      dormantData = data.entries || [];
+      renderStats();
+      renderDormant();
+    } catch (e) {
+      document.getElementById("dormantBody").innerHTML =
+        '<tr><td colspan="6" class="state-msg error">Couldn\'t load dormant tokens: ' + escapeHtml(e.message) + "</td></tr>";
+    }
+  }
+
+  async function loadRecent() {
+    try {
+      const data = await fetchJson("/recent");
+      recentData = data.pools || [];
+      renderStats();
+      renderRecent();
+    } catch (e) {
+      document.getElementById("recentBody").innerHTML =
+        '<tr><td colspan="5" class="state-msg error">Couldn\'t load recent launches: ' + escapeHtml(e.message) + "</td></tr>";
+    }
+  }
+
+  function renderStats() {
+    const totalPending = dormantData.reduce((s, d) => s + d.pendingTaxUsd, 0);
+    document.getElementById("statPending").textContent = fmtUsd(totalPending);
+    document.getElementById("statDormantCount").textContent = dormantData.length.toLocaleString();
+    document.getElementById("statRecentCount").textContent = recentData.length.toLocaleString();
+    document.getElementById("tabDormantCount").textContent = dormantData.length ? "(" + dormantData.length + ")" : "";
+    document.getElementById("tabRecentCount").textContent = recentData.length ? "(" + recentData.length + ")" : "";
+    if (dormantData.length) {
+      const oldest = dormantData.reduce((a, b) => (ageMs(a.createdAt) > ageMs(b.createdAt) ? a : b));
+      document.getElementById("statOldest").textContent = ageStr(oldest.createdAt);
+    }
+    setLive("updated " + new Date().toLocaleTimeString());
+  }
+
+  function sortRows(rows, key, dir) {
+    return [...rows].sort((a, b) => {
+      let av = key === "age" ? ageMs(a.createdAt) : a[key];
+      let bv = key === "age" ? ageMs(b.createdAt) : b[key];
+      if (key === "lastPayoutAt") {
+        av = a.lastPayoutAt ? new Date(a.lastPayoutAt).getTime() : -Infinity;
+        bv = b.lastPayoutAt ? new Date(b.lastPayoutAt).getTime() : -Infinity;
+      }
+      if (typeof av === "string") return dir * av.localeCompare(bv);
+      if (typeof av === "boolean") return dir * ((av ? 1 : 0) - (bv ? 1 : 0));
+      return dir * ((av ?? 0) - (bv ?? 0));
+    });
+  }
+
+  function matchesSearch(row) {
+    const q = document.getElementById("search").value.trim().toLowerCase();
+    if (!q) return true;
+    return row.symbol.toLowerCase().includes(q) || row.mint.toLowerCase().includes(q) || (row.name || "").toLowerCase().includes(q);
+  }
+
+  function holderRowHtml(mint, colspan) {
+    const cached = holderCache[mint];
+    let inner;
+    if (!cached) {
+      inner = '<div class="state-msg">Loading top holders…</div>';
+    } else if (cached.error) {
+      inner = '<div class="state-msg error">Couldn\'t load holders: ' + escapeHtml(cached.error) + "</div>";
+    } else if (cached.holders.length === 0) {
+      inner = '<div class="state-msg">No holder accounts found.</div>';
+    } else {
+      inner =
+        '<div class="holders-title">Top holders</div>' +
+        cached.holders
+          .map((h) => {
+            const amt = (Number(h.amountRaw) / 10 ** h.decimals).toLocaleString(undefined, { maximumFractionDigits: 2 });
+            return (
+              '<div class="holder-line"><span class="holder-addr">' +
+              escapeHtml(h.owner || h.address) +
+              '</span><span class="holder-amt">' +
+              amt +
+              "</span></div>"
+            );
+          })
+          .join("");
+    }
+    return '<tr class="holders-row"><td colspan="' + colspan + '"><div class="holders-wrap">' + inner + "</div></td></tr>";
+  }
+
+  async function toggleExpand(mint) {
+    expandedMint = expandedMint === mint ? null : mint;
+    if (expandedMint && !holderCache[mint]) {
+      holderCache[mint] = null;
+      renderCurrentTab();
+      try {
+        const data = await fetchJson("/holders?mint=" + mint);
+        holderCache[mint] = data.error ? { error: data.error } : { holders: data.holders };
+      } catch (e) {
+        holderCache[mint] = { error: e.message };
+      }
+    }
+    renderCurrentTab();
+  }
+
+  function renderDormant() {
+    const rows = sortRows(dormantData.filter(matchesSearch), sortKey, sortDir);
+    const body = document.getElementById("dormantBody");
+    if (rows.length === 0) {
+      body.innerHTML =
+        '<tr><td colspan="6" class="state-msg">No dormant tokens match yet — the background scanner is still working through stonk.fun\'s full history.</td></tr>';
+      return;
+    }
+    const maxPending = Math.max(...dormantData.map((d) => d.pendingTaxUsd), 1);
+    body.innerHTML = rows
+      .map((d) => {
+        const pct = Math.max(4, Math.round((d.pendingTaxUsd / maxPending) * 100));
+        const logo = d.imageUrl
+          ? '<img class="logo" src="' + escapeHtml(d.imageUrl) + '" onerror="this.outerHTML=\'<div class=logo-fallback>' + tokenInitial(d.symbol) + "</div>'\" />"
+          : '<div class="logo-fallback">' + tokenInitial(d.symbol) + "</div>";
+        const rowHtml =
+          '<tr class="row" onclick="toggleExpand(\'' +
+          d.mint +
+          '\')"><td><div class="token-cell">' +
+          logo +
+          '<div><div class="token-name">' +
+          escapeHtml(d.symbol) +
+          '</div><a class="token-mint" href="https://www.stonkfun.xyz/token/' +
+          d.mint +
+          '" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">' +
+          shortMint(d.mint) +
+          "</a></div></div></td>" +
+          '<td class="age-dim">' +
+          ageStr(d.createdAt) +
+          "</td>" +
+          "<td>" +
+          d.holderCount.toLocaleString() +
+          "</td>" +
+          '<td><div class="pending-wrap"><span class="pending-amt">' +
+          fmtUsd(d.pendingTaxUsd) +
+          '</span><div class="pending-bar-track"><div class="pending-bar-fill" style="width:' +
+          pct +
+          '%"></div></div></div></td>' +
+          "<td>" +
+          (d.lastPayoutAt ? ageStr(d.lastPayoutAt) + " ago" : "never") +
+          "</td>" +
+          "<td>" +
+          fmtUsd(d.volume24hUsd) +
+          "</td></tr>";
+        return rowHtml + (expandedMint === d.mint ? holderRowHtml(d.mint, 6) : "");
+      })
+      .join("");
+  }
+
+  function renderRecent() {
+    const rows = sortRows(recentData.filter(matchesSearch), sortKey === "pendingTaxUsd" ? "age" : sortKey, sortKey === "pendingTaxUsd" ? -1 : sortDir);
+    const body = document.getElementById("recentBody");
+    if (rows.length === 0) {
+      body.innerHTML = '<tr><td colspan="5" class="state-msg">Nothing launched in the last 4 hours.</td></tr>';
+      return;
+    }
+    body.innerHTML = rows
+      .map((p) => {
+        const logo = p.imageUrl
+          ? '<img class="logo" src="' + escapeHtml(p.imageUrl) + '" onerror="this.outerHTML=\'<div class=logo-fallback>' + tokenInitial(p.symbol) + "</div>'\" />"
+          : '<div class="logo-fallback">' + tokenInitial(p.symbol) + "</div>";
+        const rowHtml =
+          '<tr class="row" onclick="toggleExpand(\'' +
+          p.mint +
+          '\')"><td><div class="token-cell">' +
+          logo +
+          '<div><div class="token-name">' +
+          escapeHtml(p.symbol) +
+          '</div><a class="token-mint" href="https://www.stonkfun.xyz/token/' +
+          p.mint +
+          '" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">' +
+          shortMint(p.mint) +
+          "</a></div></div></td>" +
+          '<td><span class="badge fresh">' +
+          ageStr(p.createdAt) +
+          "</span></td>" +
+          "<td>" +
+          escapeHtml(p.quoteSymbol || "—") +
+          "</td>" +
+          "<td>" +
+          fmtUsd(p.volume24hUsd || 0) +
+          "</td>" +
+          '<td><span class="badge ' +
+          (p.isRewardLaunch ? "yes" : "no") +
+          '">' +
+          (p.isRewardLaunch ? "yes" : "no") +
+          "</span></td></tr>";
+        return rowHtml + (expandedMint === p.mint ? holderRowHtml(p.mint, 5) : "");
+      })
+      .join("");
+  }
+
+  function renderCurrentTab() {
+    if (tab === "dormant") renderDormant();
+    else renderRecent();
+  }
+
+  function switchTab(next) {
+    tab = next;
+    document.getElementById("tabDormantBtn").classList.toggle("active", tab === "dormant");
+    document.getElementById("tabRecentBtn").classList.toggle("active", tab === "recent");
+    document.getElementById("dormantTable").style.display = tab === "dormant" ? "" : "none";
+    document.getElementById("recentTable").style.display = tab === "recent" ? "" : "none";
+    renderCurrentTab();
+  }
+
+  document.getElementById("tabDormantBtn").addEventListener("click", () => switchTab("dormant"));
+  document.getElementById("tabRecentBtn").addEventListener("click", () => switchTab("recent"));
+  document.getElementById("search").addEventListener("input", renderCurrentTab);
+  document.querySelectorAll("th[data-sort]").forEach((th) => {
+    th.addEventListener("click", () => {
+      const key = th.getAttribute("data-sort");
+      if (sortKey === key) sortDir *= -1;
+      else {
+        sortKey = key;
+        sortDir = key === "symbol" || key === "quoteSymbol" ? 1 : -1;
+      }
+      renderCurrentTab();
+    });
+  });
+
+  loadDormant();
+  loadRecent();
+  setInterval(loadDormant, 60000);
+  setInterval(loadRecent, 20000);
+</script>

@@ -4,11 +4,13 @@ import { getScanCursor, setScanCursor, wasRecentlyChecked, markChecked, upsertDo
 const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
 // "Dormant" candidate pre-filter, applied BEFORE the expensive per-mint /api/rewards call (checking all
 // 66k+ tokens individually isn't feasible — this cuts the field down to only tokens worth actually
-// checking): old enough that any initial launch-day trading has settled, and essentially no volume in
-// the last 24h. Most of stonk.fun's history is dead/zero-liquidity tokens that will never clear the
-// PENDING_TAX_USD_THRESHOLD below anyway, so this filter doesn't need to be perfectly tuned.
+// checking): old enough that any initial launch-day trading has settled, and low volume relative to its
+// history. Widened from an original $25 cap after a real full pass (1,226 tokens checked) topped out at
+// $53 of pending tax no matter how much more history got scanned — a token that accrued $100+ in tax
+// before going quiet almost always still has *some* modest residual trading, which the tighter cap was
+// wrongly excluding. $150 lets those through while still screening out anything genuinely active.
 const DORMANT_MIN_AGE_MS = 24 * 60 * 60 * 1000;
-const DORMANT_MAX_VOLUME_USD = 25;
+const DORMANT_MAX_VOLUME_USD = 150;
 // Below this, not worth surfacing as "stuck" — real network/claim-transaction cost would eat it anyway.
 const PENDING_TAX_USD_THRESHOLD = 5;
 const RECHECK_TTL_HOURS = 12;
