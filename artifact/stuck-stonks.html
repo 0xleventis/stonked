@@ -343,7 +343,7 @@
   }
 
   function renderStats() {
-    const totalPending = dormantData.reduce((s, d) => s + d.pendingTaxUsd, 0);
+    const totalPending = dormantData.reduce((s, d) => s + (d.pendingTaxUsd || 0), 0);
     document.getElementById("statPending").textContent = fmtUsd(totalPending);
     document.getElementById("statDormantCount").textContent = dormantData.length.toLocaleString();
     document.getElementById("statRecentCount").textContent = recentData.length.toLocaleString();
@@ -427,7 +427,7 @@
         '<tr><td colspan="6" class="state-msg">No dormant tokens match yet — the background scanner is still working through stonk.fun\'s full history.</td></tr>';
       return;
     }
-    const maxPending = Math.max(...dormantData.map((d) => d.pendingTaxUsd), 1);
+    const maxPending = Math.max(...dormantData.map((d) => d.pendingTaxUsd || 0), 1);
     body.innerHTML = rows
       .map((d) => {
         const pct = Math.max(4, Math.round((d.pendingTaxUsd / maxPending) * 100));
@@ -484,7 +484,7 @@
           ? '<img class="logo" src="' + escapeHtml(p.imageUrl) + '" onerror="this.outerHTML=\'<div class=logo-fallback>' + tokenInitial(p.symbol) + "</div>'\" />"
           : '<div class="logo-fallback">' + tokenInitial(p.symbol) + "</div>";
         const pendingCell =
-          p.pendingTaxUsd === null
+          p.pendingTaxUsd === null || p.pendingTaxUsd === undefined
             ? '<span style="color:var(--text-faint)">—</span>'
             : (() => {
                 const pct = Math.max(4, Math.round((p.pendingTaxUsd / maxPending) * 100));
@@ -512,7 +512,7 @@
           ageStr(p.createdAt) +
           "</span></td>" +
           "<td>" +
-          (p.holderCount === null ? '<span style="color:var(--text-faint)">—</span>' : p.holderCount.toLocaleString()) +
+          (p.holderCount === null || p.holderCount === undefined ? '<span style="color:var(--text-faint)">—</span>' : p.holderCount.toLocaleString()) +
           "</td>" +
           "<td>" +
           pendingCell +

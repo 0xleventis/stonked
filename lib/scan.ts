@@ -67,7 +67,17 @@ export async function enrichWithRewards(pools: StonkfunPool[], concurrency = 15)
     try {
       const rewards = await fetchRewards(p.mint);
       if (!rewards) return { ...p, holderCount: null, pendingTaxUsd: null, lastPayoutAt: null };
-      return { ...p, holderCount: rewards.holderCount, pendingTaxUsd: rewards.pendingTaxUsd, lastPayoutAt: rewards.lastPayoutAt };
+      // stonk.fun's own API sometimes OMITS a field entirely (confirmed live: lastPayoutAt missing, not
+      // null, on a real token with holderCount 0) rather than returning null for it — normalize here so
+      // every consumer of EnrichedPool can trust these are always exactly `number | null` / `string |
+      // null`, never `undefined`. A real crash traced back to exactly this: the frontend's null checks
+      // didn't account for undefined, and calling .toLocaleString() on it threw during render.
+      return {
+        ...p,
+        holderCount: rewards.holderCount ?? null,
+        pendingTaxUsd: rewards.pendingTaxUsd ?? null,
+        lastPayoutAt: rewards.lastPayoutAt ?? null,
+      };
     } catch {
       return { ...p, holderCount: null, pendingTaxUsd: null, lastPayoutAt: null };
     }
@@ -123,18 +133,22 @@ export async function scanDormantBatch(pagesPerRun = 8, maxRewardChecks = 40): P
       await markChecked(p.mint, RECHECK_TTL_HOURS);
       if (!rewards) continue;
 
-      if (rewards.pendingTaxUsd >= PENDING_TAX_USD_THRESHOLD) {
+      if ((rewards.pendingTaxUsd ?? 0) >= PENDING_TAX_USD_THRESHOLD) {
+        // Same undefined-vs-null normalization as enrichWithRewards above — stonk.fun's API can omit a
+        // field entirely rather than nulling it, and this record gets persisted to Redis and read back
+        // by the frontend, so any undefined that slipped through here would resurface as the same
+        // .toLocaleString()-on-undefined crash on the dormant tab too.
         const entry: DormantEntry = {
           mint: p.mint,
           symbol: p.symbol,
           name: p.name,
           imageUrl: p.imageUrl,
           createdAt: p.createdAt,
-          lastPayoutAt: rewards.lastPayoutAt,
+          lastPayoutAt: rewards.lastPayoutAt ?? null,
           volume24hUsd: p.volume24hUsd ?? 0,
-          pendingTaxUsd: rewards.pendingTaxUsd,
-          pendingUsd: rewards.pendingUsd,
-          holderCount: rewards.holderCount,
+          pendingTaxUsd: rewards.pendingTaxUsd ?? 0,
+          pendingUsd: rewards.pendingUsd ?? 0,
+          holderCount: rewards.holderCount ?? 0,
           quoteSymbol: rewards.quoteSymbol,
           checkedAt: new Date().toISOString(),
         };

@@ -50,8 +50,12 @@ function ageStr(iso: string): string {
   if (hours < 48) return `${hours.toFixed(1)}h`;
   return `${Math.round(hours / 24)}d`;
 }
-function fmtUsd(n: number | null): string {
-  if (n === null) return "—";
+function fmtUsd(n: number | null | undefined): string {
+  // Loose null check deliberately covers undefined too — the upstream stonk.fun API can omit a field
+  // entirely instead of nulling it (see scan.ts's normalization comment); a strict `=== null` check here
+  // let an undefined slip through to .toLocaleString(), throwing during render and taking down the page
+  // (a real crash, traced live: clicking "Recent launches" showed Next.js's client-exception error page).
+  if (n == null) return "—";
   return n.toLocaleString(undefined, { style: "currency", currency: "USD", maximumFractionDigits: n < 10 ? 4 : 2 });
 }
 function tokenInitial(symbol: string): string {
@@ -85,8 +89,8 @@ function Logo({ imageUrl, symbol }: { imageUrl?: string; symbol: string }) {
   return <img className="logo" src={imageUrl} alt="" onError={() => setFailed(true)} />;
 }
 
-function PendingCell({ value, max }: { value: number | null; max: number }) {
-  if (value === null) return <span className="faint">—</span>;
+function PendingCell({ value, max }: { value: number | null | undefined; max: number }) {
+  if (value == null) return <span className="faint">—</span>;
   const pct = Math.max(4, Math.round((value / max) * 100));
   return (
     <div className="pending-wrap">
@@ -200,7 +204,7 @@ export default function Home() {
     }
   }
 
-  const totalPending = useMemo(() => (dormant ?? []).reduce((s, d) => s + d.pendingTaxUsd, 0), [dormant]);
+  const totalPending = useMemo(() => (dormant ?? []).reduce((s, d) => s + (d.pendingTaxUsd || 0), 0), [dormant]);
   const oldestStuck = useMemo(() => {
     if (!dormant || dormant.length === 0) return null;
     return dormant.reduce((a, b) => (ageMs(a.createdAt) > ageMs(b.createdAt) ? a : b));
@@ -312,7 +316,7 @@ export default function Home() {
                       </div>
                     </td>
                     <td>{tab === "dormant" ? <span className="age-dim">{ageStr(r.createdAt)}</span> : <span className="badge fresh">{ageStr(r.createdAt)}</span>}</td>
-                    <td>{r.holderCount === null ? <span className="faint">—</span> : r.holderCount.toLocaleString()}</td>
+                    <td>{r.holderCount == null ? <span className="faint">—</span> : r.holderCount.toLocaleString()}</td>
                     <td>
                       <PendingCell value={r.pendingTaxUsd} max={maxPending} />
                     </td>
