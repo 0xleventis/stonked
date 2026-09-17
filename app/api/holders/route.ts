@@ -1,16 +1,21 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { getTopHolders, resolveTokenAccountOwners } from "../../../lib/solana";
+import { corsJson, corsOptions } from "../../../lib/cors";
+
+export async function OPTIONS() {
+  return corsOptions();
+}
 
 export async function GET(req: NextRequest) {
   const mint = req.nextUrl.searchParams.get("mint");
-  if (!mint) return NextResponse.json({ error: "mint query param is required" }, { status: 400 });
+  if (!mint) return corsJson({ error: "mint query param is required" }, 400);
 
   try {
     const top = await getTopHolders(mint);
     const owners = await resolveTokenAccountOwners(top.map((h) => h.address));
     const holders = top.map((h) => ({ ...h, owner: owners.get(h.address) ?? null }));
-    return NextResponse.json({ mint, holders });
+    return corsJson({ mint, holders });
   } catch (err) {
-    return NextResponse.json({ error: err instanceof Error ? err.message : "Failed to read holders." }, { status: 502 });
+    return corsJson({ error: err instanceof Error ? err.message : "Failed to read holders." }, 502);
   }
 }
