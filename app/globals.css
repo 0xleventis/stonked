@@ -1,0 +1,109 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #0a0c0a;
+  --panel: #0f1410;
+  --border: #1e2a1e;
+  --text: #c9f7c9;
+  --text-dim: #6f9a6f;
+  --accent: #39ff6a;
+  --warn: #ffb347;
+  --danger: #ff5f5f;
+}
+
+html, body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: "SF Mono", "JetBrains Mono", "Fira Code", ui-monospace, Menlo, Consolas, monospace;
+  font-size: 13px;
+}
+
+.wrap {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 20px 16px 60px;
+}
+
+.title {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: var(--accent);
+  text-shadow: 0 0 12px rgba(57, 255, 106, 0.35);
+}
+
+.subtitle {
+  color: var(--text-dim);
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+.tabs {
+  display: flex;
+  gap: 8px;
+  margin: 20px 0 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.tab {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  padding: 8px 14px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 13px;
+  border-bottom: 2px solid transparent;
+}
+
+.tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+table { width: 100%; border-collapse: collapse; font-size: 12px; }
+
+th {
+  text-align: left;
+  color: var(--text-dim);
+  font-weight: 500;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+tr.row { cursor: pointer; }
+tr.row:hover { background: rgba(57, 255, 106, 0.05); }
+
+.sym { color: var(--text); font-weight: 600; }
+.mint-link { color: var(--text-dim); text-decoration: none; }
+.mint-link:hover { color: var(--accent); }
+
+.pending { color: var(--warn); font-weight: 600; }
+.age-fresh { color: var(--accent); }
+.age-old { color: var(--text-dim); }
+
+.holders-row td { background: #0c110c; }
+.holder-line { display: flex; justify-content: space-between; padding: 3px 0; color: var(--text-dim); }
+.holder-line .amt { color: var(--text); }
+
+.empty { padding: 30px; text-align: center; color: var(--text-dim); }
+.error { padding: 16px; color: var(--danger); }
+.loading { padding: 16px; color: var(--text-dim); }
+
+@media (max-width: 700px) {
+  table { display: block; overflow-x: auto; }
+}
