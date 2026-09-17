@@ -1,4 +1,4 @@
-# Stonk Stuck
+# Stonked
 
 Surfaces two kinds of stonk.fun tokens (any token on the platform, not just ones launched via Bruno):
 
