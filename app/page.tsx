@@ -180,6 +180,60 @@ function HolderList({ mint }: { mint: string }) {
   );
 }
 
+interface HarvestEvent {
+  signature: string;
+  blockTime: string | null;
+  type: "harvest" | "withdraw";
+  triggeredBy: string | null;
+}
+
+// Real, on-chain fee-sweep events — deliberately separate from (and not to be confused with) whatever
+// stonk.fun's own lastPayoutAt/payoutCount reports, since live testing in this project found those don't
+// always correspond to a discoverable on-chain event at all. "harvest" is permissionless (any wallet can
+// trigger it, usually as a side effect of unrelated trading — it does NOT mean that wallet is stonk.fun's
+// own distributor); "withdraw" requires the mint's actual withdraw-withheld authority to sign, so it's a
+// stronger (though still not conclusive) signal that whoever runs that authority did something.
+function HarvestActivity({ mint }: { mint: string }) {
+  const [events, setEvents] = useState<HarvestEvent[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/harvest?mint=${mint}`)
+      .then((res) => res.json())
+      .then((data: { events?: HarvestEvent[]; error?: string }) => {
+        if (cancelled) return;
+        if (data.error) setError(data.error);
+        else setEvents(data.events ?? []);
+      })
+      .catch((e) => !cancelled && setError(String(e)));
+    return () => {
+      cancelled = true;
+    };
+  }, [mint]);
+
+  if (error) return <div className="state-msg error">Couldn&rsquo;t load harvest activity: {error}</div>;
+  if (!events) return <div className="state-msg">Scanning recent on-chain activity…</div>;
+  if (events.length === 0) return <div className="state-msg">No harvest/withdraw activity found in this token&rsquo;s last 20 transactions.</div>;
+
+  return (
+    <div className="holders-wrap">
+      <div className="holders-title">On-chain fee-harvest activity (not stonk.fun&rsquo;s reported payouts)</div>
+      {events.map((e) => (
+        <div className="holder-line" key={e.signature}>
+          <span className="holder-addr">
+            <span className={`badge ${e.type === "withdraw" ? "yes" : "no"}`}>{e.type === "withdraw" ? "withdraw" : "harvest"}</span>{" "}
+            {e.blockTime ? `${ageStr(e.blockTime)} ago` : "unknown time"} by {e.triggeredBy ? shortMint(e.triggeredBy) : "unknown"}
+          </span>
+          <a className="holder-amt" href={`https://solscan.io/tx/${e.signature}`} target="_blank" rel="noopener noreferrer" style={{ textDecoration: "none" }}>
+            view ↗
+          </a>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 const COLUMNS: { key: SortKey; label: string }[] = [
   { key: "symbol", label: "Token" },
   { key: "age", label: "Age" },
@@ -634,6 +688,7 @@ export default function Home() {
                       <tr className="holders-row" key={`${r.mint}-holders`}>
                         <td colSpan={7}>
                           <HolderList mint={r.mint} />
+                          <HarvestActivity mint={r.mint} />
                         </td>
                       </tr>
                     )}

@@ -45,3 +45,67 @@ export async function resolveTokenAccountOwners(tokenAccounts: string[]): Promis
   );
   return owners;
 }
+
+export interface HarvestEvent {
+  signature: string;
+  blockTime: string | null;
+  type: "harvest" | "withdraw";
+  triggeredBy: string | null;
+}
+
+// Token-2022's TransferFeeExtension parses to these instruction type names under jsonParsed encoding.
+// harvestWithheldTokensToMint is confirmed live in this project's research — directly observed in real
+// transactions, reading the *parsed* instruction type rather than matching raw log text (more reliable
+// since these calls can appear nested inside inner instructions, e.g. bundled inside an unrelated swap,
+// rather than top-level). It's genuinely permissionless: no authority needed, callable by anyone —
+// observed happening as a side effect of unrelated trading bots' own swaps, not a dedicated distributor.
+// withdrawWithheldTokensFromMint is the Token-2022 program's official counterpart instruction (per its
+// published IDL) and DOES require the mint's withdraw-withheld authority to sign — a stronger signal that
+// whoever controls that authority actually acted — but this project has not yet directly caught one
+// on-chain to confirm the exact parsed-type spelling matches at runtime.
+type ParsedInstruction = { parsed?: { type: string } };
+
+function findFeeInstructionType(ins: ParsedInstruction[]): "harvest" | "withdraw" | null {
+  for (const i of ins) {
+    if (i.parsed?.type === "withdrawWithheldTokensFromMint") return "withdraw";
+  }
+  for (const i of ins) {
+    if (i.parsed?.type === "harvestWithheldTokensToMint") return "harvest";
+  }
+  return null;
+}
+
+/** Scans a mint's own recent transaction history for real, on-chain evidence that its withheld
+ * transfer-tax has actually been swept — independent of whatever stonk.fun's own API reports for
+ * lastPayoutAt/payoutCount (traced live, in this project, to NOT always correspond to a discoverable
+ * on-chain event around the reported timestamp). Bounded to the most recent `scanLimit` signatures — a
+ * live, on-demand lookup (same shape as getTopHolders), not a full-history scan. */
+export async function fetchHarvestActivity(mint: string, scanLimit = 20): Promise<HarvestEvent[]> {
+  const sigs = await rpc<{ signature: string; blockTime: number | null; err: unknown }[]>("getSignaturesForAddress", [mint, { limit: scanLimit }]);
+  const events: (HarvestEvent | null)[] = await Promise.all(
+    sigs.map(async (s) => {
+      if (s.err) return null;
+      try {
+        const tx = await rpc<{
+          blockTime: number | null;
+          meta: { innerInstructions?: { instructions: ParsedInstruction[] }[] };
+          transaction: { message: { instructions: ParsedInstruction[]; accountKeys: { pubkey: string; signer: boolean }[] } };
+        } | null>("getTransaction", [s.signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }]);
+        if (!tx) return null;
+        const allIns = [...tx.transaction.message.instructions, ...(tx.meta.innerInstructions ?? []).flatMap((ii) => ii.instructions)];
+        const type = findFeeInstructionType(allIns);
+        if (!type) return null;
+        const feePayer = tx.transaction.message.accountKeys.find((k) => k.signer)?.pubkey ?? null;
+        return {
+          signature: s.signature,
+          blockTime: tx.blockTime ? new Date(tx.blockTime * 1000).toISOString() : null,
+          type,
+          triggeredBy: feePayer,
+        } as HarvestEvent;
+      } catch {
+        return null;
+      }
+    })
+  );
+  return events.filter((e): e is HarvestEvent => e !== null);
+}

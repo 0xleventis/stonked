@@ -188,6 +188,7 @@
 
   .holders-row td { background: var(--surface-2); padding: 0; }
   .holders-wrap { padding: 14px 20px; }
+  .holders-wrap + .holders-wrap { border-top: 1px solid var(--border); }
   .holders-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-faint); margin-bottom: 8px; font-weight: 600; }
   .holder-line {
     display: flex; justify-content: space-between; gap: 12px; padding: 5px 0; font-size: 12.5px;
@@ -423,6 +424,7 @@
   let sortDir = -1;
   let expandedMint = null;
   let holderCache = {};
+  let harvestCache = {};
 
   // Client-side-only (localStorage), per-viewer — a starred list is always small and personal, so there's
   // no server-side storage to design around. watchMeta[mint] = { addedAt, baselinePayoutAt } — the payout
@@ -663,7 +665,53 @@
           })
           .join("");
     }
-    return '<tr class="holders-row"><td colspan="' + colspan + '"><div class="holders-wrap">' + inner + "</div></td></tr>";
+    // Real, on-chain fee-sweep events — separate from (not to be confused with) stonk.fun's own reported
+    // lastPayoutAt/payoutCount, which live testing in this project found don't always correspond to a
+    // discoverable on-chain event at all. "harvest" is permissionless (any wallet can trigger it, usually
+    // as a side effect of unrelated trading — it does NOT mean that wallet is stonk.fun's own
+    // distributor); "withdraw" requires the mint's actual withdraw-withheld authority to sign.
+    const hCached = harvestCache[mint];
+    let hInner;
+    if (!hCached) {
+      hInner = '<div class="state-msg">Scanning recent on-chain activity…</div>';
+    } else if (hCached.error) {
+      hInner = '<div class="state-msg error">Couldn\'t load harvest activity: ' + escapeHtml(hCached.error) + "</div>";
+    } else if (hCached.events.length === 0) {
+      hInner = '<div class="state-msg">No harvest/withdraw activity found in this token\'s last 20 transactions.</div>';
+    } else {
+      hInner =
+        '<div class="holders-title">On-chain fee-harvest activity (not stonk.fun\'s reported payouts)</div>' +
+        hCached.events
+          .map((e) => {
+            const badgeClass = e.type === "withdraw" ? "yes" : "no";
+            const label = e.type === "withdraw" ? "withdraw" : "harvest";
+            const when = e.blockTime ? ageStr(e.blockTime) + " ago" : "unknown time";
+            const who = e.triggeredBy ? shortMint(e.triggeredBy) : "unknown";
+            return (
+              '<div class="holder-line"><span class="holder-addr"><span class="badge ' +
+              badgeClass +
+              '">' +
+              label +
+              "</span> " +
+              when +
+              " by " +
+              who +
+              '</span><a class="holder-amt" href="https://solscan.io/tx/' +
+              e.signature +
+              '" target="_blank" rel="noopener noreferrer" style="text-decoration:none">view ↗</a></div>'
+            );
+          })
+          .join("");
+    }
+    return (
+      '<tr class="holders-row"><td colspan="' +
+      colspan +
+      '"><div class="holders-wrap">' +
+      inner +
+      '</div><div class="holders-wrap">' +
+      hInner +
+      "</div></td></tr>"
+    );
   }
 
   async function toggleExpand(mint) {
@@ -676,6 +724,17 @@
         holderCache[mint] = data.error ? { error: data.error } : { holders: data.holders };
       } catch (e) {
         holderCache[mint] = { error: e.message };
+      }
+      renderCurrentTab();
+    }
+    if (expandedMint && !harvestCache[mint]) {
+      harvestCache[mint] = null;
+      renderCurrentTab();
+      try {
+        const data = await fetchJson("/harvest?mint=" + mint);
+        harvestCache[mint] = data.error ? { error: data.error } : { events: data.events };
+      } catch (e) {
+        harvestCache[mint] = { error: e.message };
       }
     }
     renderCurrentTab();
