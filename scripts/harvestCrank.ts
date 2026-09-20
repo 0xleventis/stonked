@@ -72,6 +72,57 @@ function chunk<T>(items: T[], size: number): T[][] {
   return out;
 }
 
+interface WithheldSnapshot {
+  owner: string;
+  decimals: number;
+  withheldRaw: bigint;
+}
+
+// Minimal shape of what getParsedAccountInfo/getMultipleParsedAccounts actually returns for a Token-2022
+// account with the TransferFeeAmount extension — confirmed live against a real account this session
+// (extensions is an array of {extension, state} entries; transferFeeAmount's state has withheldAmount as
+// either a number or a numeric string depending on RPC version, so both are handled below).
+interface ParsedTokenAccountData {
+  parsed?: {
+    info?: {
+      owner?: string;
+      tokenAmount?: { decimals?: number };
+      extensions?: { extension?: string; state?: { withheldAmount?: number | string } }[];
+    };
+  };
+}
+
+/** Snapshots each account's withheld-tax amount BEFORE harvesting — the whole point being that once
+ * HarvestWithheldTokensToMint runs, that value resets to 0 and there is no way to retroactively recover it
+ * (it's not part of preTokenBalances/postTokenBalances, which only ever track spendable balance, and the
+ * program doesn't log individual per-account amounts). A real, live-asked question this fixes: "how much
+ * was actually withheld for holder X" was previously unanswerable after the fact. Accounts with nothing
+ * withheld, or that fail to parse, are simply omitted rather than shown as zero-noise. */
+async function fetchWithheldSnapshot(connection: Connection, accounts: PublicKey[]): Promise<Map<string, WithheldSnapshot>> {
+  const snapshot = new Map<string, WithheldSnapshot>();
+  const infos = await connection.getMultipleParsedAccounts(accounts);
+  infos.value.forEach((info, idx) => {
+    const data = info?.data as ParsedTokenAccountData | Buffer | undefined;
+    if (!data || Buffer.isBuffer(data)) return;
+    const parsedInfo = data.parsed?.info;
+    const ext = parsedInfo?.extensions?.find((e) => e.extension === "transferFeeAmount");
+    const raw = ext?.state?.withheldAmount;
+    if (raw === undefined) return;
+    const withheldRaw = typeof raw === "string" ? BigInt(raw) : BigInt(Math.round(raw));
+    if (withheldRaw === 0n) return;
+    snapshot.set(accounts[idx]!.toBase58(), {
+      owner: parsedInfo?.owner ?? "unknown",
+      decimals: parsedInfo?.tokenAmount?.decimals ?? 0,
+      withheldRaw,
+    });
+  });
+  return snapshot;
+}
+
+function fmtTokenAmount(raw: bigint, decimals: number): string {
+  return (Number(raw) / 10 ** decimals).toLocaleString(undefined, { maximumFractionDigits: 4 });
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (!args.keypairPath) {
@@ -125,6 +176,17 @@ async function main() {
 
     for (let i = 0; i < batches.length; i++) {
       const batch = batches[i]!;
+
+      // Snapshot BEFORE building/sending the harvest instruction — this is the only point in time this
+      // data is ever readable, so it has to happen up front regardless of dry-run vs. live.
+      const withheld = await fetchWithheldSnapshot(connection, batch);
+      if (withheld.size > 0) {
+        console.log(`  batch ${i + 1}/${batches.length} — withheld tax by holder before this sweep:`);
+        for (const [account, w] of withheld) {
+          console.log(`    ${w.owner}  (account ${account})  ${fmtTokenAmount(w.withheldRaw, w.decimals)} tokens withheld`);
+        }
+      }
+
       const tx = new Transaction();
       tx.add(ComputeBudgetProgram.setComputeUnitLimit({ units: 40_000 + batch.length * 3_000 }));
       tx.add(createHarvestWithheldTokensToMintInstruction(mint, batch, TOKEN_2022_PROGRAM_ID));
