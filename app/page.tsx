@@ -375,6 +375,29 @@ export default function Home() {
   const [sortKey, setSortKey] = useState<SortKey>("pendingTaxUsd");
   const [sortDir, setSortDir] = useState<1 | -1>(-1);
   const [lastUpdated, setLastUpdated] = useState<string>("connecting…");
+  const [manualMint, setManualMint] = useState("");
+  const [manualMintError, setManualMintError] = useState<string | null>(null);
+
+  // Dormant and Recent only ever show tokens the background scanner has already discovered or that
+  // launched in the last 4 hours — there was previously no way to track a specific token by mint address
+  // if it fell outside both of those (e.g. anything more than a few hours old that the dormant sweep
+  // hasn't reached yet, which in practice is most of stonk.fun's full history at any given moment). This
+  // lets the watchlist be seeded directly, independent of whether the token shows up anywhere else in the app.
+  function addMintToWatchlist() {
+    const mint = manualMint.trim();
+    if (!mint) return;
+    if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(mint)) {
+      setManualMintError("Doesn't look like a Solana address.");
+      return;
+    }
+    if (watched.has(mint)) {
+      setManualMintError("Already on your watchlist.");
+      return;
+    }
+    toggleWatch(mint, null);
+    setManualMint("");
+    setManualMintError(null);
+  }
 
   useEffect(() => {
     setError(null);
@@ -609,6 +632,25 @@ export default function Home() {
         <input className="search" placeholder="Search by symbol or mint…" value={search} onChange={(e) => setSearch(e.target.value)} />
         <span className="refresh-note">auto-refreshing</span>
       </div>
+
+      {tab === "watchlist" && (
+        <div className="toolbar" style={{ marginTop: -6 }}>
+          <input
+            className="search"
+            placeholder="Paste a mint address to track it directly — works for any StonkFun token, even ones not shown in Dormant or Recent…"
+            value={manualMint}
+            onChange={(e) => {
+              setManualMint(e.target.value);
+              setManualMintError(null);
+            }}
+            onKeyDown={(e) => e.key === "Enter" && addMintToWatchlist()}
+          />
+          <button className="theme-toggle" onClick={addMintToWatchlist}>
+            ★ Add
+          </button>
+          {manualMintError && <span className="state-msg error" style={{ padding: 0, fontSize: 11.5 }}>{manualMintError}</span>}
+        </div>
+      )}
 
       <div className="panel">
         {error && <div className="state-msg error">{error}</div>}

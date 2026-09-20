@@ -273,6 +273,12 @@
     <span class="refresh-note" id="refreshNote">auto-refreshing</span>
   </div>
 
+  <div class="toolbar" id="manualAddRow" style="display: none; margin-top: -6px">
+    <input class="search" id="manualMintInput" placeholder="Paste a mint address to track it directly — works for any StonkFun token, even ones not shown in Dormant or Recent…" />
+    <button class="theme-toggle" id="manualMintAddBtn">★ Add</button>
+    <span class="state-msg error" id="manualMintError" style="display: none; padding: 0; font-size: 11.5px"></span>
+  </div>
+
   <div class="panel">
     <table id="dormantTable">
       <thead>
@@ -945,13 +951,42 @@
     document.getElementById("dormantTable").style.display = tab === "dormant" ? "" : "none";
     document.getElementById("recentTable").style.display = tab === "recent" ? "" : "none";
     document.getElementById("watchlistTable").style.display = tab === "watchlist" ? "" : "none";
+    document.getElementById("manualAddRow").style.display = tab === "watchlist" ? "" : "none";
     if (tab === "watchlist") loadWatchlist();
     else renderCurrentTab();
+  }
+
+  // Dormant and Recent only ever show tokens the background scanner has already discovered or that
+  // launched in the last 4 hours — there was previously no way to track a specific token by mint address
+  // if it fell outside both of those (in practice, most of stonk.fun's history at any given moment). This
+  // lets the watchlist be seeded directly, independent of whether the token shows up anywhere else.
+  function addMintToWatchlist() {
+    const errEl = document.getElementById("manualMintError");
+    const input = document.getElementById("manualMintInput");
+    const mint = input.value.trim();
+    errEl.style.display = "none";
+    if (!mint) return;
+    if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(mint)) {
+      errEl.textContent = "Doesn't look like a Solana address.";
+      errEl.style.display = "";
+      return;
+    }
+    if (mint in watchMeta) {
+      errEl.textContent = "Already on your watchlist.";
+      errEl.style.display = "";
+      return;
+    }
+    toggleWatch(mint, null);
+    input.value = "";
   }
 
   document.getElementById("tabDormantBtn").addEventListener("click", () => switchTab("dormant"));
   document.getElementById("tabRecentBtn").addEventListener("click", () => switchTab("recent"));
   document.getElementById("tabWatchlistBtn").addEventListener("click", () => switchTab("watchlist"));
+  document.getElementById("manualMintAddBtn").addEventListener("click", addMintToWatchlist);
+  document.getElementById("manualMintInput").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") addMintToWatchlist();
+  });
   document.getElementById("search").addEventListener("input", renderCurrentTab);
   document.querySelectorAll("th[data-sort]").forEach((th) => {
     th.addEventListener("click", () => {
