@@ -74,6 +74,34 @@ function shortMint(mint: string): string {
   return `${mint.slice(0, 4)}…${mint.slice(-4)}`;
 }
 
+// Confirmed live against the mint's own on-chain Token-2022 metadata (name "Stonked Wojak", symbol
+// STONKED) whose metadata JSON's external_url/twitter/telegram all point back at this exact site — not
+// just taken on faith.
+const STONKED_MINT = "CLrYstF4Fpae8JuiBnw4gGFWYBrCktyVuv1t6S5GhNTG";
+
+function StonkedTokenPill() {
+  const [copied, setCopied] = useState(false);
+  function copy() {
+    navigator.clipboard
+      ?.writeText(STONKED_MINT)
+      .then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      })
+      .catch(() => {
+        // Clipboard API can be unavailable (insecure context, permission denied) — the address is still
+        // shown and selectable by hand, so this isn't a hard failure.
+      });
+  }
+  return (
+    <button className="live-pill stonked-ca" title="Click to copy the official $STONKED contract address" onClick={copy}>
+      <span className="live-dot" />
+      <span>$STONKED: {shortMint(STONKED_MINT)}</span>
+      <span className="stonked-ca-copy">{copied ? "copied ✓" : "copy"}</span>
+    </button>
+  );
+}
+
 function sortRows<T extends { symbol: string; createdAt: string; holderCount: number | null; pendingTaxUsd: number | null; lastPayoutAt: string | null; volume24hUsd: number }>(
   rows: T[],
   key: SortKey,
@@ -367,6 +395,7 @@ export default function Home() {
   const { watched, meta: watchMeta, toggle: toggleWatch, acknowledge: acknowledgePayout, hydrated: watchlistHydrated } = useWatchlist();
   const [tab, setTab] = useState<Tab>("dormant");
   const [dormant, setDormant] = useState<DormantEntry[] | null>(null);
+  const [dormantTotalCount, setDormantTotalCount] = useState<number | null>(null);
   const [recent, setRecent] = useState<Pool[] | null>(null);
   const [watchlist, setWatchlist] = useState<WatchlistEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -407,11 +436,12 @@ export default function Home() {
       if (tab === "dormant") {
         fetch("/api/dormant")
           .then((res) => res.json())
-          .then((data: { entries?: DormantEntry[]; error?: string }) => {
+          .then((data: { entries?: DormantEntry[]; totalCount?: number; error?: string }) => {
             if (cancelled) return;
             if (data.error) setError(data.error);
             else {
               setDormant(data.entries ?? []);
+              setDormantTotalCount(data.totalCount ?? null);
               setLastUpdated(new Date().toLocaleTimeString());
             }
           })
@@ -546,7 +576,11 @@ export default function Home() {
     (r) => !search.trim() || r.symbol.toLowerCase().includes(search.toLowerCase()) || r.mint.toLowerCase().includes(search.toLowerCase()) || r.name.toLowerCase().includes(search.toLowerCase())
   );
   const sorted = sortRows(filtered, sortKey, sortDir);
-  const maxPending = Math.max(...rows.map((r) => r.pendingTaxUsd ?? 0), 1);
+  // Not a spread into Math.max — with thousands of rows (the dormant list alone has grown past 22,000)
+  // that throws "Maximum call stack size exceeded" in some browsers, which was silently breaking the
+  // whole table render (confirmed live: a real user reported pending-tax/holder columns just not
+  // showing, traced back to this).
+  const maxPending = rows.reduce((m, r) => Math.max(m, r.pendingTaxUsd ?? 0), 1);
 
   return (
     <div className="page">
@@ -560,6 +594,7 @@ export default function Home() {
               Live surveillance of stonk.fun&rsquo;s full token history — dormant tokens with real, unclaimed fee revenue piling up, and everything
               launched in the last 4 hours. Not limited to any one launchpad&rsquo;s own tokens.
             </div>
+            <StonkedTokenPill />
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -600,8 +635,8 @@ export default function Home() {
         </div>
         <div className="stat">
           <div className="stat-label">Dormant tokens found</div>
-          <div className="stat-value">{dormant ? dormant.length.toLocaleString() : "—"}</div>
-          <div className="stat-note">Scanned so far, updates continuously</div>
+          <div className="stat-value">{dormantTotalCount != null ? dormantTotalCount.toLocaleString() : dormant ? dormant.length.toLocaleString() : "—"}</div>
+          <div className="stat-note">{dormant && dormantTotalCount != null && dormantTotalCount > dormant.length ? `Showing top ${dormant.length.toLocaleString()} by pending fees` : "Scanned so far, updates continuously"}</div>
         </div>
         <div className="stat">
           <div className="stat-label">Launched, last 4h</div>
@@ -630,6 +665,21 @@ export default function Home() {
 
       <div className="toolbar">
         <input className="search" placeholder="Search by symbol or mint…" value={search} onChange={(e) => setSearch(e.target.value)} />
+        {tab !== "watchlist" && (
+          <button
+            className="theme-toggle"
+            title="Toggle chronological sort order"
+            onClick={() => {
+              if (sortKey === "age") setSortDir((d) => (d === 1 ? -1 : 1) as 1 | -1);
+              else {
+                setSortKey("age");
+                setSortDir(1); // newest first — the sensible default entry point for this toggle
+              }
+            }}
+          >
+            {sortKey === "age" && sortDir === -1 ? "⬆ Oldest first" : "⬇ Newest first"}
+          </button>
+        )}
         <span className="refresh-note">auto-refreshing</span>
       </div>
 

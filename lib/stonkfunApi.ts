@@ -83,6 +83,11 @@ export interface StonkfunRewards {
   distributedUsd: number;
   pendingTokens: number;
   pendingUsd: number;
+  // Present on live responses alongside pendingTokens/pendingUsd — the portion of pendingUsd that's
+  // already been withdrawn-from-mint and swapped into the quote asset, just not yet delivered to holder
+  // wallets (confirmed live: this is the "On its way" bucket in stonk.fun's own UI copy). Optional here
+  // since older/cached responses in this codebase were captured before this field was known to exist.
+  awaitingDeliveryTokens?: number;
   pendingTaxTokens: number;
   pendingTaxUsd: number;
   payoutCount: number;

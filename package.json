@@ -8,7 +8,8 @@
     "build": "next build",
     "start": "next start",
     "scan-once": "tsx scripts/scan-once.ts",
-    "harvest-crank": "tsx scripts/harvestCrank.ts"
+    "harvest-crank": "tsx scripts/harvestCrank.ts",
+    "watch-rewards": "tsx scripts/rewardWatcher.ts"
   },
   "dependencies": {
     "@solana/spl-token": "^0.4.15",

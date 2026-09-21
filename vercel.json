@@ -1,7 +1,11 @@
 {
-  "crons": [{ "path": "/api/cron/scan", "schedule": "*/5 * * * *" }],
+  "crons": [
+    { "path": "/api/cron/scan", "schedule": "*/5 * * * *" },
+    { "path": "/api/cron/watch-rewards", "schedule": "*/2 * * * *" }
+  ],
   "functions": {
     "app/api/cron/scan/route.ts": { "maxDuration": 60 },
+    "app/api/cron/watch-rewards/route.ts": { "maxDuration": 300 },
     "app/api/recent/route.ts": { "maxDuration": 60 }
   }
 }

@@ -33,8 +33,10 @@ const RPC_URL = process.env.SOLANA_RPC_URL ?? "https://api.mainnet-beta.solana.c
 const ACCOUNTS_PER_BATCH = 20;
 // Refuses to touch more than this many accounts for a single mint in one run without an explicit
 // override — a sanity ceiling, not a hard protocol limit, so a mistyped mint or an unexpectedly large
-// holder set doesn't silently fire off hundreds of transactions.
-const MAX_ACCOUNTS_PER_MINT = 500;
+// holder set doesn't silently fire off hundreds of transactions. Override per-run with
+// MAX_ACCOUNTS_PER_MINT=<n> for a mint that's genuinely this large (e.g. an established, high-holder
+// reward launch) rather than raising the default for every future run.
+const MAX_ACCOUNTS_PER_MINT = Number(process.env.MAX_ACCOUNTS_PER_MINT ?? 500);
 
 function parseArgs(argv: string[]) {
   const args = { live: false, keypairPath: undefined as string | undefined, mints: [] as string[] };
@@ -159,62 +161,70 @@ async function main() {
     }
 
     console.log(`=== ${mintStr} ===`);
-    const accounts = await fetchAllTokenAccounts(connection, mint);
-    console.log(`Found ${accounts.length} Token-2022 account(s) for this mint.`);
+    // Whole per-mint body wrapped in try/catch — confirmed live that an RPC 429 (after the SDK's own
+    // retries are exhausted) throws an uncaught error that otherwise kills the entire Node process,
+    // silently abandoning every mint still queued behind the one that failed. One rate-limited mint
+    // should cost that mint's harvest this run, not the whole batch.
+    try {
+      const accounts = await fetchAllTokenAccounts(connection, mint);
+      console.log(`Found ${accounts.length} Token-2022 account(s) for this mint.`);
 
-    if (accounts.length === 0) {
-      console.log("Nothing to harvest.\n");
-      continue;
-    }
-    if (accounts.length > MAX_ACCOUNTS_PER_MINT) {
-      console.warn(`⚠️  ${accounts.length} accounts exceeds the safety ceiling of ${MAX_ACCOUNTS_PER_MINT} — skipping this mint. Raise MAX_ACCOUNTS_PER_MINT in the script if this is genuinely intended.`);
-      continue;
-    }
-
-    const batches = chunk(accounts, ACCOUNTS_PER_BATCH);
-    console.log(`Splitting into ${batches.length} transaction(s) of up to ${ACCOUNTS_PER_BATCH} accounts each.`);
-
-    for (let i = 0; i < batches.length; i++) {
-      const batch = batches[i]!;
-
-      // Snapshot BEFORE building/sending the harvest instruction — this is the only point in time this
-      // data is ever readable, so it has to happen up front regardless of dry-run vs. live.
-      const withheld = await fetchWithheldSnapshot(connection, batch);
-      if (withheld.size > 0) {
-        console.log(`  batch ${i + 1}/${batches.length} — withheld tax by holder before this sweep:`);
-        for (const [account, w] of withheld) {
-          console.log(`    ${w.owner}  (account ${account})  ${fmtTokenAmount(w.withheldRaw, w.decimals)} tokens withheld`);
-        }
+      if (accounts.length === 0) {
+        console.log("Nothing to harvest.\n");
+        continue;
       }
-
-      const tx = new Transaction();
-      tx.add(ComputeBudgetProgram.setComputeUnitLimit({ units: 40_000 + batch.length * 3_000 }));
-      tx.add(createHarvestWithheldTokensToMintInstruction(mint, batch, TOKEN_2022_PROGRAM_ID));
-      tx.feePayer = payer.publicKey;
-      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
-      tx.recentBlockhash = blockhash;
-
-      if (!args.live) {
-        const sim = await connection.simulateTransaction(tx, [payer]);
-        if (sim.value.err) {
-          console.log(`  batch ${i + 1}/${batches.length}: SIMULATION FAILED — ${JSON.stringify(sim.value.err)}`);
-          (sim.value.logs ?? []).slice(-8).forEach((l) => console.log(`    ${l}`));
-        } else {
-          console.log(`  batch ${i + 1}/${batches.length}: simulation OK (${batch.length} accounts, ${sim.value.unitsConsumed ?? "?"} compute units) — nothing sent.`);
-        }
+      if (accounts.length > MAX_ACCOUNTS_PER_MINT) {
+        console.warn(`⚠️  ${accounts.length} accounts exceeds the safety ceiling of ${MAX_ACCOUNTS_PER_MINT} — skipping this mint. Raise MAX_ACCOUNTS_PER_MINT in the script if this is genuinely intended.`);
         continue;
       }
 
-      tx.sign(payer);
-      try {
-        const sig = await sendAndConfirmRawTransaction(connection, tx.serialize(), { commitment: "confirmed" });
-        console.log(`  batch ${i + 1}/${batches.length}: ✅ https://solscan.io/tx/${sig}`);
-      } catch (err) {
-        console.log(`  batch ${i + 1}/${batches.length}: ❌ ${err instanceof Error ? err.message : err}`);
+      const batches = chunk(accounts, ACCOUNTS_PER_BATCH);
+      console.log(`Splitting into ${batches.length} transaction(s) of up to ${ACCOUNTS_PER_BATCH} accounts each.`);
+
+      for (let i = 0; i < batches.length; i++) {
+        const batch = batches[i]!;
+
+        // Snapshot BEFORE building/sending the harvest instruction — this is the only point in time this
+        // data is ever readable, so it has to happen up front regardless of dry-run vs. live.
+        const withheld = await fetchWithheldSnapshot(connection, batch);
+        if (withheld.size > 0) {
+          console.log(`  batch ${i + 1}/${batches.length} — withheld tax by holder before this sweep:`);
+          for (const [account, w] of withheld) {
+            console.log(`    ${w.owner}  (account ${account})  ${fmtTokenAmount(w.withheldRaw, w.decimals)} tokens withheld`);
+          }
+        }
+
+        const tx = new Transaction();
+        tx.add(ComputeBudgetProgram.setComputeUnitLimit({ units: 40_000 + batch.length * 3_000 }));
+        tx.add(createHarvestWithheldTokensToMintInstruction(mint, batch, TOKEN_2022_PROGRAM_ID));
+        tx.feePayer = payer.publicKey;
+        const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
+        tx.recentBlockhash = blockhash;
+
+        if (!args.live) {
+          const sim = await connection.simulateTransaction(tx, [payer]);
+          if (sim.value.err) {
+            console.log(`  batch ${i + 1}/${batches.length}: SIMULATION FAILED — ${JSON.stringify(sim.value.err)}`);
+            (sim.value.logs ?? []).slice(-8).forEach((l) => console.log(`    ${l}`));
+          } else {
+            console.log(`  batch ${i + 1}/${batches.length}: simulation OK (${batch.length} accounts, ${sim.value.unitsConsumed ?? "?"} compute units) — nothing sent.`);
+          }
+          continue;
+        }
+
+        tx.sign(payer);
+        try {
+          const sig = await sendAndConfirmRawTransaction(connection, tx.serialize(), { commitment: "confirmed" });
+          console.log(`  batch ${i + 1}/${batches.length}: ✅ https://solscan.io/tx/${sig}`);
+        } catch (err) {
+          console.log(`  batch ${i + 1}/${batches.length}: ❌ ${err instanceof Error ? err.message : err}`);
+        }
+        void lastValidBlockHeight;
       }
-      void lastValidBlockHeight;
+      console.log("");
+    } catch (err) {
+      console.log(`  ❌ ${mintStr} failed entirely (skipping): ${err instanceof Error ? err.message : err}\n`);
     }
-    console.log("");
   }
 
   console.log(

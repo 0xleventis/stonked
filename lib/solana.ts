@@ -46,6 +46,61 @@ export async function resolveTokenAccountOwners(tokenAccounts: string[]): Promis
   return owners;
 }
 
+const TOKEN_2022_PROGRAM_ID = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
+
+/** Every Token-2022 mint this wallet currently holds a nonzero balance of — the starting point for "which
+ * tokens does this wallet need watching for", since a wallet's actual holdings change as it buys/sells. */
+export async function getWalletHoldings(owner: string): Promise<{ mint: string; amount: number }[]> {
+  const result = await rpc<{
+    value: { account: { data: { parsed: { info: { mint: string; tokenAmount: { uiAmount: number | null } } } } } }[];
+  }>("getTokenAccountsByOwner", [owner, { programId: TOKEN_2022_PROGRAM_ID }, { encoding: "jsonParsed" }]);
+  return result.value
+    .map((v) => ({ mint: v.account.data.parsed.info.mint, amount: v.account.data.parsed.info.tokenAmount.uiAmount ?? 0 }))
+    .filter((h) => h.amount > 0);
+}
+
+export interface WithheldStatus {
+  held: boolean;
+  balance: number;
+  withheldAmount: number;
+}
+
+/** Whether a specific wallet's token account for this mint currently has anything sitting withheld
+ * (uncollected transfer-tax not yet swept into the mint's reserve) — the direct, per-account answer to
+ * "was I included in the last harvest": zero means whatever accrued on this account has already been
+ * swept (this account WAS part of some past harvest, whether ours or anyone else's); nonzero means
+ * there's tax sitting there untouched, so no harvest has caught this account since it last accrued any.
+ * `held: false` if the wallet has no token account for this mint at all (never bought, or fully sold and
+ * the account got closed) — a real, non-error case, not the same as "held with zero balance". */
+export async function getWithheldStatus(owner: string, mint: string): Promise<WithheldStatus> {
+  const result = await rpc<{
+    value: {
+      account: {
+        data: {
+          parsed: {
+            info: {
+              tokenAmount: { uiAmount: number | null; decimals: number };
+              extensions?: { extension: string; state?: { withheldAmount?: number | string } }[];
+            };
+          };
+        };
+      };
+    }[];
+  }>("getTokenAccountsByOwner", [owner, { mint }, { encoding: "jsonParsed" }]);
+
+  if (result.value.length === 0) return { held: false, balance: 0, withheldAmount: 0 };
+  const info = result.value[0]!.account.data.parsed.info;
+  const ext = info.extensions?.find((e) => e.extension === "transferFeeAmount");
+  const raw = ext?.state?.withheldAmount;
+  const withheldRaw = raw === undefined ? 0 : typeof raw === "string" ? Number(raw) : raw;
+  const decimals = info.tokenAmount.decimals || 1;
+  return {
+    held: true,
+    balance: info.tokenAmount.uiAmount ?? 0,
+    withheldAmount: withheldRaw / 10 ** decimals,
+  };
+}
+
 export interface HarvestEvent {
   signature: string;
   blockTime: string | null;
